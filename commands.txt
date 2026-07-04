@@ -1,0 +1,15 @@
+
+source .venv/bin/activate
+
+uvicorn main:app --reload 
+# Simplest — type text, get text reply
+python tests/text_client.py
+
+# Full voice — mic input, speaker output
+python tests/mic_client.py
+
+# Send an audio file, get response.mp3 back
+python tests/ws_client.py tests/fixtures/sample.wav 
+
+# Automated unit tests (no server needed, all mocked)
+pytest tests/test_client.py -v   

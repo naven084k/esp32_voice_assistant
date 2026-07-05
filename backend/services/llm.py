@@ -1,3 +1,4 @@
+import os
 import re
 import uuid
 from contextvars import ContextVar
@@ -5,10 +6,13 @@ from pathlib import Path
 
 import aiosqlite
 from langchain.agents import create_agent
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from services.tools import build_tools
 from services.callbacks import TimingCallbackHandler
+
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
 current_thread_id: ContextVar[str] = ContextVar("current_thread_id", default="")
 
@@ -38,6 +42,10 @@ _checkpointer: AsyncSqliteSaver | None = None
 _agent = None
 
 
+def get_model() -> ChatGoogleGenerativeAI:
+    return ChatGoogleGenerativeAI(model=GEMINI_MODEL, google_api_key=os.environ["GOOGLE_GEMINI_API_KEY"])
+
+
 async def init():
     global _conn, _checkpointer, _agent
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -45,7 +53,7 @@ async def init():
     _checkpointer = AsyncSqliteSaver(_conn)
     await _checkpointer.setup()
     _agent = create_agent(
-        model="openai:gpt-4o-mini",
+        model=get_model(),
         tools=build_tools(),
         checkpointer=_checkpointer,
     )

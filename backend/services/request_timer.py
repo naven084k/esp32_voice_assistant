@@ -13,6 +13,7 @@ class _Row:
     layer: str
     duration: float
     detail: str = ""
+    start_offset: float = 0.0
 
 
 @dataclass
@@ -23,6 +24,7 @@ class ToolCallRecord:
     duration: float = 0.0
     ok: bool = True
     error: str = ""
+    start_offset: float = 0.0
 
 
 @dataclass
@@ -36,18 +38,36 @@ class RequestTimer:
     tool_calls: list[ToolCallRecord] = field(default_factory=list)
 
     def record(self, layer: str, duration: float, detail: str = ""):
-        self._rows.append(_Row(layer, duration, detail))
+        end_offset = time.perf_counter() - self._start
+        start_offset = round(end_offset - duration, 3)
+        self._rows.append(_Row(layer, round(duration, 3), detail, start_offset))
 
     def add_tool_call(self, call: ToolCallRecord):
+        end_offset = time.perf_counter() - self._start
+        call.start_offset = round(end_offset - call.duration, 3)
         self.tool_calls.append(call)
 
     def snapshot(self) -> dict:
+        steps = [{**asdict(r), "type": "stage"} for r in self._rows]
+        steps += [
+            {
+                "layer": f"Tool: {tc.name}",
+                "duration": tc.duration,
+                "detail": tc.output if tc.ok else tc.error,
+                "start_offset": tc.start_offset,
+                "type": "tool",
+                "ok": tc.ok,
+            }
+            for tc in self.tool_calls
+        ]
+        steps.sort(key=lambda s: s["start_offset"])
         return {
             "id": self.id,
             "label": self.label,
             "thread_id": self.thread_id,
             "timestamp": self.timestamp,
             "total_duration": round(time.perf_counter() - self._start, 3),
+            "steps": steps,
             "tool_calls": [asdict(tc) for tc in self.tool_calls],
         }
 

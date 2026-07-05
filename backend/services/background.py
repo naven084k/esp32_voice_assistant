@@ -50,6 +50,7 @@ async def _send_telegram(chat_id: int, text: str):
 async def _execute(task: str, thread_id: str):
     try:
         from langchain.agents import create_agent
+        from services.llm import get_model
         from services.tools import build_tools
 
         deep_tools = [
@@ -58,7 +59,7 @@ async def _execute(task: str, thread_id: str):
         ]
 
         agent = create_agent(
-            model="openai:gpt-4o-mini",
+            model=get_model(),
             tools=deep_tools,
         )
 

@@ -15,7 +15,7 @@ SUPPORTED_TYPES = {"audio/wav", "audio/mpeg", "audio/mp4", "audio/webm", "audio/
 async def voice_chat(
     audio: UploadFile = File(...),
     system_prompt: str = Form("You are a helpful voice assistant. Keep responses concise and conversational."),
-    voice: str = Form("alloy"),
+    voice: str = Form(tts.DEFAULT_VOICE),
     thread_id: str = Form(None),
 ):
     if audio.content_type not in SUPPORTED_TYPES:
@@ -61,13 +61,16 @@ async def voice_ws(websocket: WebSocket):
     audio_buffer = bytearray()
     config = {
         "system_prompt": "You are a helpful voice assistant. Keep responses concise and conversational.",
-        "voice": "am_adam",
+        "voice": tts.DEFAULT_VOICE,
         "thread_id": str(uuid.uuid4()),
     }
 
     try:
         while True:
             data = await websocket.receive()
+
+            if data.get("type") == "websocket.disconnect":
+                break
 
             if "bytes" in data and data["bytes"]:
                 audio_buffer.extend(data["bytes"])

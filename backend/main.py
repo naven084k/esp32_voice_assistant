@@ -9,21 +9,19 @@ logging.basicConfig(
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
-logging.getLogger("openai").setLevel(logging.WARNING)
+logging.getLogger("google_genai").setLevel(logging.WARNING)
 
-import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routers import chat, voice, dashboard
 from routers.telegram_bot import start_bot, stop_bot
-from services import llm, tts
+from services import llm
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await llm.init()
-    await asyncio.get_event_loop().run_in_executor(None, tts._get_kokoro)
     await start_bot()
     yield
     await stop_bot()
@@ -43,6 +41,7 @@ app.include_router(chat.router, prefix="/api")
 app.include_router(voice.router, prefix="/api")
 app.include_router(dashboard.router, prefix="/api")
 app.include_router(dashboard.page_router)
+app.include_router(chat.page_router)
 
 
 @app.get("/health")

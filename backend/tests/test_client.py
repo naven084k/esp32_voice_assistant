@@ -1,5 +1,5 @@
 """
-Automated smoke tests — no live server or API key needed (OpenAI calls are mocked).
+Automated smoke tests — no live server or API key needed (Gemini calls are mocked).
 
 Run:
     pytest tests/test_client.py -v
@@ -9,7 +9,8 @@ import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-os.environ.setdefault("OPENAI_API_KEY", "test-key")
+os.environ.setdefault("GOOGLE_GEMINI_API_KEY", "test-key")
+os.environ.setdefault("GOOGLE_TTS_API_KEY", "test-key")
 
 from httpx import AsyncClient, ASGITransport
 from main import app

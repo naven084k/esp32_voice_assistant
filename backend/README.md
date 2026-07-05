@@ -1,16 +1,16 @@
 # ARIA Voice Agent — Backend
 
-A local-first voice assistant backend built with FastAPI, LangChain, and on-device AI models.
+A voice assistant backend built with FastAPI and LangChain, using local STT and Google Cloud services for the LLM and TTS.
 
-**Pipeline:** Mic → Whisper (local STT) → LangGraph Agent (OpenAI LLM + Tavily search) → Kokoro (local TTS) → Speaker
+**Pipeline:** Mic → Whisper (local STT) → LangGraph Agent (Gemini LLM + Tavily search) → Google Cloud TTS → Speaker
 
 ---
 
 ## Features
 
 - **Local STT** — faster-whisper `base` model runs on-device (no cloud)
-- **Local TTS** — Kokoro ONNX, streams PCM audio directly (no cloud)
-- **LLM Agent** — OpenAI `gpt-4o-mini` via LangGraph with web search and datetime tools
+- **Cloud TTS** — Google Cloud Text-to-Speech, streamed as PCM chunks
+- **LLM Agent** — Google Gemini via LangGraph with web search and datetime tools
 - **Persistent memory** — SQLite-backed conversation history survives restarts
 - **Streaming playback** — audio plays as it's generated, no buffering delay
 - **Hardware-ready** — WebSocket protocol works with ESP32 push-button clients
@@ -25,10 +25,10 @@ A local-first voice assistant backend built with FastAPI, LangChain, and on-devi
 | API | FastAPI + uvicorn |
 | Agent | LangChain `create_agent` + LangGraph |
 | STT | faster-whisper (local, `base` model) |
-| TTS | Kokoro ONNX (local, streams PCM) |
+| TTS | Google Cloud Text-to-Speech (REST API, streamed as PCM) |
 | Search tool | Tavily Search API |
 | Memory | SQLite via `langgraph-checkpoint-sqlite` |
-| LLM | OpenAI `gpt-4o-mini` |
+| LLM | Google Gemini (`gemini-2.5-flash` by default) |
 
 ---
 
@@ -51,11 +51,12 @@ cp .env.example .env
 Edit `.env`:
 
 ```
-OPENAI_API_KEY=sk-...          # LLM (gpt-4o-mini)
+GOOGLE_GEMINI_API_KEY=...      # LLM — get one at https://aistudio.google.com/apikey
+GOOGLE_TTS_API_KEY=...         # Google Cloud TTS — enable "Cloud Text-to-Speech API" in GCP, then create an API key
 TAVILY_API_KEY=tvly-...        # Web search tool — free tier at app.tavily.com
 ```
 
-> Whisper and Kokoro models are downloaded automatically on first startup (~230 MB total).
+> Only the Whisper STT model is downloaded automatically on first startup (~150 MB) — TTS and LLM are cloud calls, so no local model download needed for those.
 
 ### 3. Start the server
 
@@ -67,8 +68,6 @@ On first run you will see:
 
 ```
 [STT] Loading Whisper 'base' model...
-[TTS] Downloading kokoro-v1.0.onnx from GitHub releases ...
-[TTS] Kokoro ready.
 INFO: Application startup complete.
 ```
 
@@ -90,7 +89,7 @@ source .venv/bin/activate
 uvicorn main:app
 ```
 
-Confirm you see `INFO: Application startup complete.` This ensures `.env` is correct and the Whisper/Kokoro models (~230 MB) have already been downloaded — you don't want that happening silently the first time systemd starts it. Once confirmed, stop it with `Ctrl+C`.
+Confirm you see `INFO: Application startup complete.` This ensures `.env` is correct (Gemini/Google TTS keys valid) and the Whisper model has already been downloaded — you don't want that happening silently the first time systemd starts it. Once confirmed, stop it with `Ctrl+C`.
 
 ### 2. Create a logs folder
 
@@ -126,8 +125,8 @@ WantedBy=multi-user.target
 Notes on the choices above:
 - `WorkingDirectory` matters beyond convention — `memory/checkpoints.db` and `memory/tasks.db` are resolved **relative to the process's CWD**, so getting this wrong silently creates fresh/empty databases elsewhere.
 - `User=` keeps the process running as your own account (with access to your `.env`, home directory, etc.) even though installing the unit file itself needs `sudo`.
-- `Restart=on-failure` + `RestartSec=10` restarts the process only on a crash (not a clean stop), throttled to once per 10s so a bad `OPENAI_API_KEY` doesn't cause a restart storm.
-- `After=network-online.target` / `Wants=network-online.target` is a best-effort wait for network before starting, so cold-boot Kokoro downloads or Telegram polling don't fail immediately (requires `NetworkManager-wait-online.service` or `systemd-networkd-wait-online.service` to be active, which is the default on most Ubuntu/Xubuntu installs).
+- `Restart=on-failure` + `RestartSec=10` restarts the process only on a crash (not a clean stop), throttled to once per 10s so a bad `GOOGLE_GEMINI_API_KEY`/`GOOGLE_TTS_API_KEY` doesn't cause a restart storm.
+- `After=network-online.target` / `Wants=network-online.target` is a best-effort wait for network before starting, so cold-boot Whisper downloads, Gemini/Google TTS calls, or Telegram polling don't fail immediately (requires `NetworkManager-wait-online.service` or `systemd-networkd-wait-online.service` to be active, which is the default on most Ubuntu/Xubuntu installs).
 
 ### 4. Enable and start it
 
@@ -170,7 +169,7 @@ sudo systemctl daemon-reload
 
 ### Gotchas
 
-- **First run needs internet** to download the Kokoro/Whisper models — step 1 above avoids this happening silently on the first systemd-triggered start.
+- **First run needs internet** to download the Whisper model and reach the Gemini/Google TTS APIs — step 1 above avoids this happening silently on the first systemd-triggered start.
 - If `TELEGRAM_BOT_TOKEN` is set in `.env`, the bot starts polling Telegram at every startup, which needs network access at boot.
 - Set `DASHBOARD_ACCESS_KEY` explicitly in `.env` before deploying this way. If left unset, a temporary key is generated and only printed to the startup log — annoying to dig out of `logs/stdout.log` versus just setting it yourself.
 - **User service alternative** (no `sudo`, but only starts when you log in): put the same `[Service]`/`[Unit]` content (minus the `User=` line) in `~/.config/systemd/user/aria-voiceagent.service`, then run `systemctl --user daemon-reload && systemctl --user enable --now aria-voiceagent.service`. To have it start at boot even without an active login session, additionally run `loginctl enable-linger YOUR_LINUX_USERNAME`.
@@ -185,6 +184,8 @@ sudo systemctl daemon-reload
 | `POST` | `/api/chat` | Text chat (JSON in, JSON out) |
 | `POST` | `/api/voice/chat` | Audio file in, WAV out (multipart) |
 | `WS` | `/api/ws/voice` | Streaming voice pipeline |
+| `GET` | `/chat-ui` | Web chat interface |
+| `GET` | `/dashboard` | Request/tool-call activity dashboard |
 
 Interactive docs: `http://localhost:8000/docs`
 
@@ -201,7 +202,7 @@ curl -X POST http://localhost:8000/api/chat \
 ```bash
 curl -X POST http://localhost:8000/api/voice/chat \
   -F "audio=@recording.wav" \
-  -F "voice=am_adam" \
+  -F "voice=en-IN-Neural2-B" \
   --output reply.wav
 ```
 
@@ -216,7 +217,7 @@ Client → Server:
 Server → Client:
   {"type":"transcript","text":"..."}   Whisper result
   {"type":"reply","text":"..."}        LLM text reply
-  binary frames                        Kokoro PCM chunks (16-bit, 24 kHz, mono, 32 KB each)
+  binary frames                        Google Cloud TTS PCM chunks (16-bit, 24 kHz, mono, 32 KB each)
   {"type":"audio_end"}                 stream complete
 ```
 
@@ -245,21 +246,21 @@ python tests/ws_client.py tests/fixtures/sample.wav
 python tests/mic_client.py --list-devices
 
 # Pick specific mic/speaker
-python tests/mic_client.py --input-device 0 --output-device 1 --voice am_adam
+python tests/mic_client.py --input-device 0 --output-device 1 --voice en-IN-Neural2-B
 ```
 
 ---
 
-## Available TTS Voices (Kokoro)
+## Available TTS Voices (Google Cloud, Neural2)
 
 | Voice | Style |
 |---|---|
-| `am_adam` | American male (default) |
-| `am_michael` | American male |
-| `af_bella` | American female |
-| `af_sarah` | American female |
-| `bf_emma` | British female |
-| `bm_george` | British male |
+| `en-IN-Neural2-B` | Indian English (default) |
+| `en-IN-Neural2-A` / `-C` / `-D` | Indian English |
+| `en-US-Neural2-D` / `-A` / `-C` / `-F` / `-H` / `-I` | American English |
+| `en-GB-Neural2-A` / `-B` | British English |
+
+Full voice catalog: https://cloud.google.com/text-to-speech/docs/voices
 
 ---
 
@@ -293,9 +294,9 @@ backend/
 │   ├── chat.py              # POST /api/chat
 │   └── voice.py             # POST /api/voice/chat + WS /api/ws/voice
 ├── services/
-│   ├── llm.py               # LangGraph agent + memory
+│   ├── llm.py               # LangGraph agent + memory (Gemini)
 │   ├── stt.py               # faster-whisper STT
-│   ├── tts.py               # Kokoro ONNX TTS
+│   ├── tts.py               # Google Cloud TTS (REST API)
 │   ├── tools.py             # datetime + Tavily web search
 │   ├── callbacks.py         # LangChain timing callbacks
 │   └── request_timer.py     # Per-request tabular latency logging
@@ -306,11 +307,8 @@ backend/
 │   └── ws_client.py         # WebSocket file-based tester
 ├── esp32/
 │   └── voice_button.ino     # ESP32 Arduino push-button client
-├── memory/
-│   └── checkpoints.db       # SQLite conversation memory (auto-created)
-└── models/
-    ├── kokoro-v1.0.onnx     # Kokoro TTS model (auto-downloaded)
-    └── voices-v1.0.bin      # Kokoro voice embeddings (auto-downloaded)
+└── memory/
+    └── checkpoints.db       # SQLite conversation memory (auto-created)
 ```
 
 ---
@@ -320,8 +318,10 @@ backend/
 | Layer | Typical |
 |---|---|
 | STT — whisper/base | 0.4 – 0.8s |
-| LLM — gpt-4o-mini | 0.8 – 2.0s |
+| LLM — Gemini 2.5 Flash | 0.5 – 1.5s |
 | Tool (Tavily search) | 0.5 – 1.5s |
-| TTS — Kokoro | 0.3 – 0.8s |
+| TTS — Google Cloud | 0.3 – 0.9s (network-dependent) |
 | **Total (no tool)** | **~1.5 – 3s** |
 | **Total (with search)** | **~3 – 5s** |
+
+> These are local-model figures re-measured with cloud LLM/TTS in mind — actual latency now also depends on network round-trip to Google's APIs.

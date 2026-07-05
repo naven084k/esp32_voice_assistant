@@ -34,7 +34,7 @@ import websockets
 
 SAMPLE_RATE = 16000
 DTYPE = "int16"
-TTS_SAMPLE_RATE = 24000  # Kokoro native output rate
+TTS_SAMPLE_RATE = 24000  # Google Cloud TTS output rate (requested via sampleRateHertz)
 
 
 # ─── Audio devices ────────────────────────────────────────────────────────────
@@ -185,6 +185,7 @@ async def run(voice: str, system_prompt: str, input_device, output_device,
             for i in range(0, len(wav_bytes), 4096):
                 await ws.send(wav_bytes[i : i + 4096])
             await ws.send(json.dumps({"type": "end"}))
+            sent_at = time.monotonic()
 
             # Start streaming player before first chunk arrives
             chunk_q, player_thread = start_streaming_player(output_device)
@@ -194,7 +195,8 @@ async def run(voice: str, system_prompt: str, input_device, output_device,
                 msg = await ws.recv()
                 if isinstance(msg, bytes):
                     if not playing:
-                        print("  Playing response...")
+                        elapsed = time.monotonic() - sent_at
+                        print(f"  Playing response... (first audio after {elapsed:.2f}s)")
                         playing = True
                     chunk_q.put(msg)          # decoded + played immediately
                 else:
@@ -205,6 +207,8 @@ async def run(voice: str, system_prompt: str, input_device, output_device,
                         print(f"  Bot     : {data['text']}")
                     elif data["type"] == "audio_end":
                         chunk_q.put(None)     # signal player to finish
+                        elapsed = time.monotonic() - sent_at
+                        print(f"  Response complete in {elapsed:.2f}s")
                         break
                     elif data["type"] == "error":
                         chunk_q.put(None)
@@ -221,10 +225,12 @@ def main():
     parser.add_argument("--list-devices", action="store_true")
     parser.add_argument("--input-device",  type=int, default=None, metavar="ID")
     parser.add_argument("--output-device", type=int, default=None, metavar="ID")
-    parser.add_argument("--voice", default="am_adam",
-                        choices=["af_bella", "af_sarah", "af_sky", "af",
-                                 "am_adam", "am_michael",
-                                 "bf_emma", "bf_isabella", "bm_george", "bm_lewis"])
+    parser.add_argument("--voice", default="en-IN-Neural2-B",
+                        choices=["en-US-Neural2-A", "en-US-Neural2-C", "en-US-Neural2-D",
+                                 "en-US-Neural2-F", "en-US-Neural2-H", "en-US-Neural2-I",
+                                 "en-GB-Neural2-A", "en-GB-Neural2-B",
+                                 "en-IN-Neural2-A", "en-IN-Neural2-B",
+                                 "en-IN-Neural2-C", "en-IN-Neural2-D"])
     parser.add_argument("--system-prompt", default="You are a helpful voice assistant.",
                         dest="system_prompt")
     parser.add_argument("--server", default="http://localhost:8000", metavar="URL")

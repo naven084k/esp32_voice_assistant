@@ -46,8 +46,6 @@ class TimingCallbackHandler(AsyncCallbackHandler):
         out_str = str(output)
         t = get_timer()
         if t:
-            preview = out_str[:60].replace("\n", " ")
-            t.record("Tool", elapsed, preview[:36])
             t.add_tool_call(ToolCallRecord(name=name, args=args, output=out_str[:500], duration=round(elapsed, 3)))
 
     async def on_tool_error(self, error: Exception, *, run_id: UUID, **kwargs):
@@ -55,5 +53,4 @@ class TimingCallbackHandler(AsyncCallbackHandler):
         name, args = self._tool_meta.pop(run_id, ("tool", ""))
         t = get_timer()
         if t:
-            t.record("Tool (err)", elapsed, str(error)[:40])
             t.add_tool_call(ToolCallRecord(name=name, args=args, duration=round(elapsed, 3), ok=False, error=str(error)[:500]))

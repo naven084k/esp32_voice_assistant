@@ -1,28 +1,10 @@
-import logging
-import os
-import secrets
-
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 
+from services.auth import verify_key
 from services.request_timer import get_history, get_request
 
-logger = logging.getLogger("voice_agent.dashboard")
-
-_ACCESS_KEY = os.getenv("DASHBOARD_ACCESS_KEY")
-if not _ACCESS_KEY:
-    _ACCESS_KEY = secrets.token_urlsafe(16)
-    logger.warning("DASHBOARD_ACCESS_KEY not set — generated a temporary key for this session:")
-    logger.warning("  %s", _ACCESS_KEY)
-    logger.warning("Set DASHBOARD_ACCESS_KEY in .env to keep a stable key across restarts.")
-
-
-def _verify_key(x_dashboard_key: str | None = Header(None, alias="X-Dashboard-Key")):
-    if not x_dashboard_key or not secrets.compare_digest(x_dashboard_key, _ACCESS_KEY):
-        raise HTTPException(status_code=401, detail="Invalid or missing dashboard key")
-
-
-router = APIRouter(dependencies=[Depends(_verify_key)])
+router = APIRouter(dependencies=[Depends(verify_key)])
 page_router = APIRouter()
 
 
@@ -68,6 +50,20 @@ _PAGE = """<!DOCTYPE html>
   #detail h2 { font-size: 16px; margin: 0 0 4px; color: #f1f2f4; }
   #detail .sub { font-size: 12px; color: #6b7280; margin-bottom: 20px; }
   .empty { color: #565b66; padding: 40px; font-size: 14px; }
+  .timeline { margin-bottom: 22px; }
+  .timeline h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #6b7280; margin: 0 0 10px; }
+  .step-row { margin-bottom: 8px; }
+  .step-label {
+    display: flex; align-items: baseline; gap: 8px; font-size: 12.5px;
+    color: #cfe0ff; margin-bottom: 3px;
+  }
+  .step-label .dur { color: #7c8595; font-variant-numeric: tabular-nums; }
+  .step-label .detail { color: #6b7280; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .step-track { position: relative; height: 8px; background: #14161c; border-radius: 4px; overflow: hidden; }
+  .step-bar { position: absolute; top: 0; height: 100%; border-radius: 4px; background: #5b8cff; }
+  .step-bar.tool { background: #3ecf7a; }
+  .step-bar.err { background: #ff5c5c; }
+
   .call {
     background: #14161c; border: 1px solid #23262e; border-radius: 10px;
     margin-bottom: 12px; overflow: hidden;
@@ -210,11 +206,35 @@ async function selectRequest(id) {
   loadList();
 
   const detail = document.getElementById("detail");
+  let html = `<h2>${esc(r.label)}</h2><div class="sub">thread ${esc(r.thread_id)} · ${r.total_duration}s total · ${r.tool_calls.length} tool call(s)</div>`;
+
+  const steps = r.steps || [];
+  if (steps.length) {
+    html += `<div class="timeline"><h3>Timeline</h3>`;
+    const total = r.total_duration || 1;
+    for (const s of steps) {
+      const left = Math.max(0, (s.start_offset / total) * 100);
+      const width = Math.max((s.duration / total) * 100, 0.5);
+      const barClass = s.type === "tool" ? (s.ok === false ? "tool err" : "tool") : (s.ok === false ? "err" : "");
+      html += `
+        <div class="step-row">
+          <div class="step-label">
+            <span>${esc(s.layer)}</span>
+            <span class="dur">${s.duration}s</span>
+            <span class="detail">${esc(s.detail)}</span>
+          </div>
+          <div class="step-track">
+            <div class="step-bar ${barClass}" style="left:${left}%; width:${width}%;"></div>
+          </div>
+        </div>`;
+    }
+    html += `</div>`;
+  }
+
   if (!r.tool_calls.length) {
-    detail.innerHTML = `<h2>${esc(r.label)}</h2><div class="sub">thread ${esc(r.thread_id)} · ${r.total_duration}s · no tools called</div>`;
+    detail.innerHTML = html;
     return;
   }
-  let html = `<h2>${esc(r.label)}</h2><div class="sub">thread ${esc(r.thread_id)} · ${r.total_duration}s total · ${r.tool_calls.length} tool call(s)</div>`;
   for (const c of r.tool_calls) {
     html += `
       <div class="call">

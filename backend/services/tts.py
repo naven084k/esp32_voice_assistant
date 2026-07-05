@@ -1,56 +1,44 @@
-import asyncio
+import base64
 import io
+import os
 import re
 import time
-import urllib.request
 import wave
-from pathlib import Path
 from typing import AsyncIterator
 
-import numpy as np
-from kokoro_onnx import Kokoro
+import httpx
 
 from services.request_timer import get_timer
 
 SAMPLE_RATE = 24000
-DEFAULT_VOICE = "am_adam"
-
-MODELS_DIR = Path("models")
-_MODEL_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
-MODEL_FILE  = MODELS_DIR / "kokoro-v1.0.onnx"
-VOICES_FILE = MODELS_DIR / "voices-v1.0.bin"
+DEFAULT_VOICE = "en-IN-Neural2-B"
 
 VOICES = {
-    "af_bella", "af_sarah", "af_sky", "af_nicole",
-    "am_adam", "am_michael",
-    "bf_emma", "bf_isabella",
-    "bm_george", "bm_lewis",
+    "en-US-Neural2-A", "en-US-Neural2-C", "en-US-Neural2-D",
+    "en-US-Neural2-F", "en-US-Neural2-H", "en-US-Neural2-I",
+    "en-GB-Neural2-A", "en-GB-Neural2-B",
+    "en-IN-Neural2-A", "en-IN-Neural2-B", "en-IN-Neural2-C", "en-IN-Neural2-D",
 }
 
-_kokoro: Kokoro | None = None
+_TTS_URL = "https://texttospeech.googleapis.com/v1/text:synthesize"
+_MAX_CHARS = 1000  # Google Cloud TTS accepts up to 5,000 bytes of input per request
+_CHUNK_BYTES = 32768
 
 
-def _download_if_missing():
-    MODELS_DIR.mkdir(exist_ok=True)
-    for dest, name in [(MODEL_FILE, "kokoro-v1.0.onnx"), (VOICES_FILE, "voices-v1.0.bin")]:
-        if not dest.exists():
-            urllib.request.urlretrieve(f"{_MODEL_URL}/{name}", dest)
+def _api_key() -> str:
+    key = os.environ.get("GOOGLE_TTS_API_KEY")
+    if not key:
+        raise RuntimeError("GOOGLE_TTS_API_KEY is not set — required for Google Cloud TTS.")
+    return key
 
 
-_MAX_CHARS = 300  # Kokoro's 510-token limit ≈ ~300 characters safely
-
-
-def _get_kokoro() -> Kokoro:
-    global _kokoro
-    if _kokoro is None:
-        _download_if_missing()
-        _kokoro = Kokoro(str(MODEL_FILE), str(VOICES_FILE))
-    return _kokoro
+def _language_code(voice: str) -> str:
+    parts = voice.split("-")
+    return "-".join(parts[:2])
 
 
 def _split_sentences(text: str) -> list[str]:
     """Split text into sentence-sized chunks under _MAX_CHARS each."""
-    # Split on sentence boundaries
     parts = re.split(r'(?<=[.!?])\s+', text.strip())
     chunks, current = [], ""
     for part in parts:
@@ -71,30 +59,44 @@ def _split_sentences(text: str) -> list[str]:
     return chunks or [text[:_MAX_CHARS]]
 
 
+async def _synthesize_pcm(text: str, voice: str) -> bytes:
+    payload = {
+        "input": {"text": text},
+        "voice": {"languageCode": _language_code(voice), "name": voice},
+        "audioConfig": {"audioEncoding": "LINEAR16", "sampleRateHertz": SAMPLE_RATE},
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(_TTS_URL, params={"key": _api_key()}, json=payload)
+        resp.raise_for_status()
+        wav_bytes = base64.b64decode(resp.json()["audioContent"])
+
+    with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
+        return wf.readframes(wf.getnframes())
+
+
 async def synthesize_stream(text: str, voice: str = DEFAULT_VOICE) -> AsyncIterator[bytes]:
     if voice not in VOICES:
         voice = DEFAULT_VOICE
 
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, _get_kokoro)
-
     start = time.perf_counter()
     total_bytes = 0
-    CHUNK_BYTES = 32768
+    first_chunk_elapsed = None
 
     for sentence in _split_sentences(text):
-        async for samples, _ in _get_kokoro().create_stream(sentence, voice=voice, speed=1.0, lang="en-us"):
-            pcm = (np.array(samples, dtype=np.float32) * 32767).clip(-32768, 32767).astype(np.int16)
-            raw = pcm.tobytes()
-            for i in range(0, len(raw), CHUNK_BYTES):
-                chunk = raw[i : i + CHUNK_BYTES]
-                total_bytes += len(chunk)
-                yield chunk
+        pcm = await _synthesize_pcm(sentence, voice)
+        for i in range(0, len(pcm), _CHUNK_BYTES):
+            chunk = pcm[i : i + _CHUNK_BYTES]
+            if first_chunk_elapsed is None:
+                first_chunk_elapsed = time.perf_counter() - start
+            total_bytes += len(chunk)
+            yield chunk
 
     elapsed = time.perf_counter() - start
     t = get_timer()
     if t:
-        t.record("TTS (Kokoro)", elapsed, f"{total_bytes:,} bytes  voice={voice}")
+        first_chunk_str = f"{first_chunk_elapsed:.2f}s" if first_chunk_elapsed is not None else "n/a"
+        t.record("TTS (Google Cloud)", elapsed, f"{total_bytes:,} bytes  voice={voice}  first_chunk={first_chunk_str}")
 
 
 async def synthesize(text: str, voice: str = DEFAULT_VOICE) -> bytes:

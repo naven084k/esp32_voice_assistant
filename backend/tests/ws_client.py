@@ -68,10 +68,12 @@ async def run(audio_path: str, voice: str, system_prompt: str):
 def main():
     parser = argparse.ArgumentParser(description="WebSocket voice pipeline tester")
     parser.add_argument("audio", help="Path to audio file (WAV, MP3, etc.)")
-    parser.add_argument("--voice", default="af_bella",
-                        choices=["af_bella", "af_sarah", "af_sky", "af",
-                                 "am_adam", "am_michael",
-                                 "bf_emma", "bf_isabella", "bm_george", "bm_lewis"])
+    parser.add_argument("--voice", default="en-IN-Neural2-B",
+                        choices=["en-US-Neural2-A", "en-US-Neural2-C", "en-US-Neural2-D",
+                                 "en-US-Neural2-F", "en-US-Neural2-H", "en-US-Neural2-I",
+                                 "en-GB-Neural2-A", "en-GB-Neural2-B",
+                                 "en-IN-Neural2-A", "en-IN-Neural2-B",
+                                 "en-IN-Neural2-C", "en-IN-Neural2-D"])
     parser.add_argument("--system-prompt", default="You are a helpful voice assistant.", dest="system_prompt")
     args = parser.parse_args()
 

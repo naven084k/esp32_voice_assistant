@@ -103,7 +103,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         voice_file = await update.message.voice.get_file()
         audio_bytes = bytes(await voice_file.download_as_bytearray())
 
-        # Transcribe with local Whisper
+        # Transcribe with Google Cloud STT (OGG/Opus voice note)
         transcript = await stt.transcribe(audio_bytes, "voice.ogg")
         if not transcript:
             await update.message.reply_text("Couldn't hear that clearly. Please try again.")

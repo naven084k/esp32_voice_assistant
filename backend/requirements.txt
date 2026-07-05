@@ -2,6 +2,11 @@ fastapi>=0.111.0
 uvicorn[standard]>=0.29.0
 langchain>=0.3.0
 langchain-google-genai>=2.0.0
+langchain-openai>=0.2.0
+langchain-ollama>=0.2.0
+faster-whisper>=1.0.0
+pyttsx3>=2.90
+pyobjc>=10.0; sys_platform == "darwin"
 langgraph>=0.2.0
 langgraph-checkpoint-sqlite>=2.0.0
 aiosqlite>=0.20.0

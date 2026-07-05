@@ -13,6 +13,10 @@ from services.tools import build_tools
 from services.callbacks import TimingCallbackHandler
 
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "gemini").lower()
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 
 current_thread_id: ContextVar[str] = ContextVar("current_thread_id", default="")
 
@@ -42,8 +46,16 @@ _checkpointer: AsyncSqliteSaver | None = None
 _agent = None
 
 
-def get_model() -> ChatGoogleGenerativeAI:
-    return ChatGoogleGenerativeAI(model=GEMINI_MODEL, google_api_key=os.environ["GOOGLE_GEMINI_API_KEY"])
+def get_model():
+    if LLM_PROVIDER == "openai":
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(model=OPENAI_MODEL, api_key=os.environ["OPENAI_API_KEY"], max_retries=3)
+    if LLM_PROVIDER == "ollama":
+        from langchain_ollama import ChatOllama
+        return ChatOllama(model=OLLAMA_MODEL, base_url=OLLAMA_BASE_URL)
+    return ChatGoogleGenerativeAI(
+        model=GEMINI_MODEL, google_api_key=os.environ["GOOGLE_GEMINI_API_KEY"], max_retries=3,
+    )
 
 
 async def init():

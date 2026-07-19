@@ -1,14 +1,18 @@
 #include <Arduino.h>
 #include <WiFi.h>
-#include <WiFiClientSecure.h>
-#include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <ESP_I2S.h>
+#include <WebSocketsClient.h>
+// ^ Library: "WebSockets" by Markus Sattler (Links2004/arduinoWebSockets) — install via
+//   Arduino IDE Library Manager, search "WebSockets", then verify <WebSocketsClient.h> resolves.
 
 // ====== EDIT THESE ======================================================
-#define WIFI_SSID       "tes"
+#define WIFI_SSID       "test"
 #define WIFI_PASSWORD   "test"
-#define OPENAI_API_KEY  "test"
+
+#define VPS_HOST        "YOUR_TUNNEL_HOSTNAME"     // cloudflared hostname, e.g. "abc-def-ghi.trycloudflare.com" — no "https://" prefix, no trailing slash
+#define VPS_PORT        443                        // cloudflared serves over standard HTTPS/wss port, not the backend's local --port
+#define VPS_WS_PATH     "/api/ws/voice"            // wss:// via cloudflared — still no auth (see backend README)
 // ========================================================================
 
 #define I2S_MIC_BCLK    4     // SCK
@@ -21,60 +25,23 @@
 #define RECORD_SECONDS      15     // safety cap; recording normally stops early via "2"
 #define RECORD_BUFFER_BYTES (SAMPLE_RATE_HZ * 2 * RECORD_SECONDS)
 
-#define STT_MODEL    "whisper-1"
-#define STT_LANGUAGE "en"     // test in English first; "hi" later for Hindi
-
 #define I2S_SPK_BCLK    15    // MAX98357 BCLK
 #define I2S_SPK_LRC     16    // MAX98357 LRC (WS)
 #define I2S_SPK_DOUT    17    // MAX98357 DIN
 // MAX98357: VIN->5V(or 3.3V), GND->GND, SD->3.3V (enables mono L+R mix output)
 
-#define TTS_MODEL          "tts-1"
-#define TTS_VOICE          "alloy"
-#define TTS_SAMPLE_RATE_HZ 24000     // OpenAI response_format=pcm is fixed 24kHz/16-bit/mono
+#define TTS_SAMPLE_RATE_HZ 24000   // must match services/tts.py SAMPLE_RATE on the backend
 
 I2SClass I2S_mic;
 I2SClass I2S_speaker;
 uint8_t* recBuffer = nullptr;
 size_t   recBytes  = 0;
 
-int g_volumePercent = 150;   // TTS playback volume: 0=mute, 100=unity gain, up to 150=boosted (may clip)
+int  g_volumePercent = 150;   // TTS playback volume: 0=mute, 100=unity gain, up to 150=boosted (may clip)
+bool wsConnected     = false;
+bool waitingForReply = false;
 
-// Growable PSRAM sink for HTTPClient::writeToStream(). Unlike reading getStreamPtr()
-// directly, writeToStream() transparently de-chunks Transfer-Encoding: chunked bodies
-// (which is what OpenAI's TTS endpoint sends, since it has no Content-Length) - reading
-// the raw stream ourselves let chunk-size/CRLF framing bytes leak into the PCM as noise.
-class PsramAudioStream : public Stream {
-public:
-  uint8_t* buf = nullptr;
-  size_t   len = 0;
-  size_t   capacity = 0;
-
-  bool reserve(size_t initialCapacity) {
-    buf = (uint8_t*)ps_malloc(initialCapacity);
-    if (!buf) return false;
-    capacity = initialCapacity;
-    len = 0;
-    return true;
-  }
-  size_t write(uint8_t b) override { return write(&b, 1); }
-  size_t write(const uint8_t *data, size_t size) override {
-    if (len + size > capacity) {
-      size_t newCap = capacity ? capacity : 4096;
-      while (newCap < len + size) newCap *= 2;
-      uint8_t* grown = (uint8_t*)ps_realloc(buf, newCap);
-      if (!grown) return 0;
-      buf = grown;
-      capacity = newCap;
-    }
-    memcpy(buf + len, data, size);
-    len += size;
-    return size;
-  }
-  int available() override { return 0; }
-  int read() override { return -1; }
-  int peek() override { return -1; }
-};
+WebSocketsClient webSocket;
 
 void writeWavHeader(uint8_t* h, uint32_t pcmBytes, uint32_t sr) {
   uint32_t fileSize = pcmBytes + 36;
@@ -144,143 +111,36 @@ void recordUntilStop() {
                 (millis() - startMs)/1000.0f, (unsigned)recBytes, (int)peak, rms, (int)dc);
 }
 
-String transcribeAudio() {
-  Serial.println("[STT] uploading to Whisper...");
+// Streams recBuffer to the backend over the already-open WebSocket, then sends the
+// "end" message that tells the backend to run STT -> LLM -> TTS on what it received.
+void sendAudioToBackend() {
+  if (!wsConnected) { Serial.println("[WS] not connected to backend, can't send audio"); return; }
+
+  Serial.printf("[WS] sending %u bytes of audio...\n", (unsigned)recBytes);
   uint32_t t0 = millis();
-
-  const String boundary = "----ESP32S3Boundary7d3a";
-  String head;
-  head  = "--" + boundary + "\r\n";
-  head += "Content-Disposition: form-data; name=\"model\"\r\n\r\n";
-  head += String(STT_MODEL) + "\r\n";
-  head += "--" + boundary + "\r\n";
-  head += "Content-Disposition: form-data; name=\"temperature\"\r\n\r\n0\r\n";
-  if (strlen(STT_LANGUAGE) > 0) {
-    head += "--" + boundary + "\r\n";
-    head += "Content-Disposition: form-data; name=\"language\"\r\n\r\n";
-    head += String(STT_LANGUAGE) + "\r\n";
+  const size_t CHUNK = 4096;
+  for (size_t off = 0; off < recBytes; off += CHUNK) {
+    size_t len = min(CHUNK, recBytes - off);
+    webSocket.sendBIN(recBuffer + off, len);
+    yield();  // let the WiFi/TCP stack breathe and avoid tripping the watchdog on long sends
   }
-  head += "--" + boundary + "\r\n";
-  head += "Content-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n";
-  head += "Content-Type: audio/wav\r\n\r\n";
-  String tail = "\r\n--" + boundary + "--\r\n";
-
-  uint8_t wav[44];
-  writeWavHeader(wav, recBytes, SAMPLE_RATE_HZ);
-
-  size_t bodyLen = head.length() + 44 + recBytes + tail.length();
-  uint8_t* body = (uint8_t*)ps_malloc(bodyLen);
-  if (!body) { Serial.println("[STT] body alloc failed"); return ""; }
-  size_t p = 0;
-  memcpy(body + p, head.c_str(), head.length()); p += head.length();
-  memcpy(body + p, wav, 44);                     p += 44;
-  memcpy(body + p, recBuffer, recBytes);         p += recBytes;
-  memcpy(body + p, tail.c_str(), tail.length()); p += tail.length();
-
-  WiFiClientSecure client;
-  client.setInsecure();
-  HTTPClient https;
-  https.setReuse(false);
-  https.setTimeout(30000);
-  if (!https.begin(client, "https://api.openai.com/v1/audio/transcriptions")) {
-    Serial.println("[STT] begin failed"); free(body); return "";
-  }
-  https.addHeader("Authorization", String("Bearer ") + OPENAI_API_KEY);
-  https.addHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
-
-  int code = https.POST(body, bodyLen);
-  free(body);
-  String resp = (code > 0) ? https.getString() : "";
-  https.end();
-
-  Serial.printf("[STT] HTTP %d  (%.1fs)\n", code, (millis() - t0) / 1000.0f);
-  Serial.print("[STT] raw: "); Serial.println(resp);
-
-  if (code != 200) return "";
-  JsonDocument doc;
-  if (deserializeJson(doc, resp)) return "";
-  if (doc["error"].is<JsonObject>()) {
-    Serial.print("[STT] API error: ");
-    Serial.println(doc["error"]["message"].as<const char*>());
-    return "";
-  }
-  return doc["text"] | "";
+  webSocket.sendTXT("{\"type\":\"end\"}");
+  waitingForReply = true;
+  Serial.printf("[WS] sent (%.1fs), waiting for reply...\n", (millis() - t0) / 1000.0f);
 }
 
-void speakText(const String &text) {
-  Serial.println("[TTS] requesting speech...");
-  uint32_t t0 = millis();
-
-  JsonDocument reqDoc;
-  reqDoc["model"] = TTS_MODEL;
-  reqDoc["voice"] = TTS_VOICE;
-  reqDoc["input"] = text;
-  reqDoc["response_format"] = "pcm";
-  String reqBody;
-  serializeJson(reqDoc, reqBody);
-
-  WiFiClientSecure client;
-  client.setInsecure();
-  HTTPClient https;
-  https.setReuse(false);
-  https.setTimeout(30000);
-  if (!https.begin(client, "https://api.openai.com/v1/audio/speech")) {
-    Serial.println("[TTS] begin failed");
-    return;
-  }
-  https.addHeader("Authorization", String("Bearer ") + OPENAI_API_KEY);
-  https.addHeader("Content-Type", "application/json");
-
-  int code = https.POST(reqBody);
-  if (code != 200) {
-    String resp = https.getString();
-    Serial.printf("[TTS] HTTP %d\n", code);
-    JsonDocument doc;
-    if (!deserializeJson(doc, resp) && doc["error"].is<JsonObject>()) {
-      Serial.print("[TTS] API error: ");
-      Serial.println(doc["error"]["message"].as<const char*>());
-    }
-    https.end();
-    return;
-  }
-
-  // TTS generation can pause for a couple seconds between chunks; the WiFiClientSecure's
-  // default read timeout (~5s) is too short for that and trips writeToStream() into
-  // HTTPC_ERROR_READ_TIMEOUT (-11). Stretch it out now that we're actually connected.
-  https.getStreamPtr()->setTimeout(20000);
-
-  // --- Download the whole PCM payload into PSRAM first (via writeToStream(), which
-  // correctly de-chunks the response), so network jitter/TLS stalls and chunk framing
-  // can never corrupt the I2S DMA feed during playback. ---
-  PsramAudioStream pcmStream;
-  if (!pcmStream.reserve((size_t)(TTS_SAMPLE_RATE_HZ * 2 * 10))) { // guess 10s, grows if needed
-    Serial.println("[TTS] pcm alloc failed");
-    https.end();
-    return;
-  }
-  int written = https.writeToStream(&pcmStream);
-  https.end();
-  if (written < 0) {
-    Serial.printf("[TTS] writeToStream error %d\n", written);
-    free(pcmStream.buf);
-    return;
-  }
-  uint8_t* pcm    = pcmStream.buf;
-  size_t   pcmLen = pcmStream.len;
-  Serial.printf("[TTS] downloaded %u bytes  (%.1fs)\n", (unsigned)pcmLen, (millis() - t0) / 1000.0f);
-
-  // --- Play from the PSRAM buffer in one steady pass; I2S_speaker.write() paces
-  // itself off the DMA, so playback is now decoupled from the network entirely. ---
-  size_t evenLen = pcmLen & ~size_t(1);   // keep 16-bit PCM samples aligned
+// Plays one raw-PCM chunk (16-bit, 24kHz, mono, headerless — matches services/tts.py's
+// contract) as it arrives, so playback starts before the full reply has been downloaded.
+void playPcmChunk(const uint8_t* data, size_t len) {
+  size_t evenLen = len & ~size_t(1);   // keep 16-bit PCM samples aligned
   const size_t chunkSamples = 512;
-  uint8_t stereoBuf[chunkSamples * 4];    // MAX98357 needs a full L+R frame per sample
-  uint32_t playT0 = millis();
+  uint8_t stereoBuf[chunkSamples * 4];  // MAX98357 needs a full L+R frame per sample
   for (size_t i = 0; i < evenLen; i += chunkSamples * 2) {
     size_t bytesThisChunk = evenLen - i;
     if (bytesThisChunk > chunkSamples * 2) bytesThisChunk = chunkSamples * 2;
     size_t samples = bytesThisChunk / 2;
     for (size_t s = 0; s < samples; s++) {
-      int16_t sample = (int16_t)(pcm[i + s * 2] | (pcm[i + s * 2 + 1] << 8));
+      int16_t sample = (int16_t)(data[i + s * 2] | (data[i + s * 2 + 1] << 8));
       int32_t scaled = ((int32_t)sample * g_volumePercent) / 100;
       if (scaled > 32767) scaled = 32767; else if (scaled < -32768) scaled = -32768;
       uint8_t b0 = (uint8_t)(scaled & 0xFF), b1 = (uint8_t)((scaled >> 8) & 0xFF);
@@ -290,8 +150,53 @@ void speakText(const String &text) {
     }
     I2S_speaker.write(stereoBuf, samples * 4);
   }
-  free(pcm);
-  Serial.printf("[TTS] played %u bytes  (%.1fs)\n", (unsigned)evenLen, (millis() - playT0) / 1000.0f);
+}
+
+void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
+  switch (type) {
+    case WStype_CONNECTED:
+      wsConnected = true;
+      Serial.println("[WS] connected to backend");
+      break;
+
+    case WStype_DISCONNECTED:
+      wsConnected = false;
+      waitingForReply = false;
+      Serial.println("[WS] disconnected — will auto-reconnect");
+      break;
+
+    case WStype_TEXT: {
+      JsonDocument doc;
+      if (deserializeJson(doc, (const char*)payload, length)) {
+        Serial.println("[WS] bad JSON from server");
+        break;
+      }
+      String t = doc["type"] | "";
+      if (t == "transcript") {
+        Serial.printf("YOU SAID:\n  \"%s\"\n", (const char*)(doc["text"] | ""));
+      } else if (t == "reply") {
+        Serial.printf("ASSISTANT:\n  \"%s\"\n", (const char*)(doc["text"] | ""));
+      } else if (t == "audio_end") {
+        waitingForReply = false;
+        Serial.println("[WS] reply complete\n==================================================\n");
+      } else if (t == "error") {
+        waitingForReply = false;
+        Serial.printf("[WS] error: %s\n", (const char*)(doc["detail"] | ""));
+      }
+      break;
+    }
+
+    case WStype_BIN:
+      playPcmChunk(payload, length);
+      break;
+
+    case WStype_ERROR:
+      Serial.println("[WS] transport error");
+      break;
+
+    default:
+      break;
+  }
 }
 
 void setup() {
@@ -332,14 +237,20 @@ void setup() {
   if (WiFi.status() != WL_CONNECTED) { Serial.println("FATAL: WiFi failed"); while (true) delay(1000); }
   Serial.printf("WiFi OK  IP=%s  RSSI=%d dBm\n",
                 WiFi.localIP().toString().c_str(), WiFi.RSSI());
+
+  Serial.printf("Connecting to backend wss://%s:%d%s ...\n", VPS_HOST, VPS_PORT, VPS_WS_PATH);
+  // beginSSL with no fingerprint/CA arg = certificate validation is skipped (insecure TLS).
+  // Fine for testing behind cloudflared; the tunnel's cert is real, we just aren't pinning it.
+  webSocket.beginSSL(VPS_HOST, VPS_PORT, VPS_WS_PATH);
+  webSocket.onEvent(webSocketEvent);
+  webSocket.setReconnectInterval(5000);
 }
 
 void loop() {
-  Serial.printf("Type 1 + Enter to start recording (2 + Enter stops it early). "
-                "Type v<0-150> + Enter to set volume (now %d%%)...\n", g_volumePercent);
-  while (!Serial.available()) {
-    delay(20);
-  }
+  webSocket.loop();   // must run every cycle to process the socket and keep it alive
+
+  if (!Serial.available()) { delay(20); return; }
+
   String line = Serial.readStringUntil('\n');
   line.trim();
 
@@ -357,16 +268,17 @@ void loop() {
     return;
   }
 
+  if (!wsConnected) {
+    Serial.println("Not connected to backend yet - try again shortly.");
+    return;
+  }
+  if (waitingForReply) {
+    Serial.println("Still waiting on the previous reply - try again shortly.");
+    return;
+  }
+
   Serial.println(">>> RECORDING... type 2 + Enter to stop <<<");
   recordUntilStop();
-
-  String text = transcribeAudio();
   Serial.println("==================================================");
-  if (text.length()) {
-    Serial.printf("YOU SAID:\n  \"%s\"\n", text.c_str());
-    speakText(text);
-  } else {
-    Serial.println("Transcription failed (see log above).");
-  }
-  Serial.println("==================================================\n");
+  sendAudioToBackend();
 }

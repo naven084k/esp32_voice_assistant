@@ -98,7 +98,23 @@ async def process(text: str, thread_id: str | None = None, system_prompt: str = 
         config={**config, "callbacks": [TimingCallbackHandler()]},
     )
     current_thread_id.reset(_token)
-    return _strip_markdown(result["messages"][-1].content)
+    return _strip_markdown(_content_to_text(result["messages"][-1].content))
+
+
+def _content_to_text(content) -> str:
+    """Some Gemini model variants return AIMessage.content as a list of content-block
+    dicts (e.g. [{"type": "text", "text": "..."}]) instead of a plain string."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and item.get("text"):
+                parts.append(item["text"])
+        return "".join(parts)
+    return str(content)
 
 
 def _strip_markdown(text: str) -> str:

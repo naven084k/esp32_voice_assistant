@@ -27,6 +27,8 @@ async def voice_chat(
     new_timer(label="voice/chat", thread_id=tid)
     try:
         transcript = await stt.transcribe(audio_bytes, audio.filename or "audio.wav")
+        if not transcript.strip():
+            raise HTTPException(status_code=422, detail="Could not understand audio")
         reply = await llm.process(transcript, thread_id=tid, system_prompt=system_prompt)
         wav_bytes = await tts.synthesize(reply, voice)
         return StreamingResponse(
@@ -34,6 +36,8 @@ async def voice_chat(
             media_type="audio/wav",
             headers={"X-Transcript": transcript, "X-Reply": reply, "X-Thread-Id": tid},
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
@@ -90,6 +94,10 @@ async def voice_ws(websocket: WebSocket):
                     try:
                         transcript = await stt.transcribe(bytes(audio_buffer))
                         await websocket.send_json({"type": "transcript", "text": transcript})
+
+                        if not transcript.strip():
+                            await websocket.send_json({"type": "error", "detail": "Could not understand audio"})
+                            continue
 
                         reply = await llm.process(transcript, thread_id=config["thread_id"], system_prompt=config["system_prompt"])
                         await websocket.send_json({"type": "reply", "text": reply})

@@ -93,33 +93,30 @@ def _read_ieee_extended(data: bytes) -> float:
 
 def _aiff_to_wav(data: bytes) -> bytes:
     """macOS's NSSpeechSynthesizer writes AIFF-C with 'twos' (big-endian PCM) compression —
-    Python's stdlib `aifc` module rejects that compression tag, so parse chunks by hand."""
+    Python's stdlib `aifc` module rejects that compression tag, and the `chunk` module was
+    removed in Python 3.13+, so parse the IFF chunk structure by hand with `struct` instead."""
     import array
     import struct
-    from chunk import Chunk
 
-    f = io.BytesIO(data)
-    form = Chunk(f, bigendian=True)
-    if form.getname() != b"FORM" or form.read(4) not in (b"AIFF", b"AIFC"):
+    if data[:4] != b"FORM" or data[8:12] not in (b"AIFF", b"AIFC"):
         raise ValueError("not an AIFF/AIFF-C file")
 
     nchannels = sampwidth = framerate = None
     frames = b""
-    while True:
-        try:
-            chunk = Chunk(f, bigendian=True)
-        except EOFError:
-            break
-        name = chunk.getname()
+    pos = 12
+    end = 8 + struct.unpack(">L", data[4:8])[0]
+    while pos + 8 <= end:
+        name = data[pos:pos + 4]
+        size = struct.unpack(">L", data[pos + 4:pos + 8])[0]
+        body = data[pos + 8:pos + 8 + size]
         if name == b"COMM":
-            body = chunk.read(chunk.getsize())
             nchannels, _nframes, sampwidth_bits = struct.unpack(">hlh", body[:8])
             sampwidth = (sampwidth_bits + 7) // 8
             framerate = int(_read_ieee_extended(body[8:18]))
         elif name == b"SSND":
-            offset, _blocksize = struct.unpack(">ll", chunk.read(8))
-            frames = chunk.read(chunk.getsize() - 8)[offset:]
-        chunk.skip()
+            offset, _blocksize = struct.unpack(">ll", body[:8])
+            frames = body[8 + offset:]
+        pos += 8 + size + (size & 1)  # chunks are padded to an even size
 
     if sampwidth == 2:  # 'twos' is big-endian 16-bit PCM — byteswap to little-endian for WAV
         samples = array.array("h")

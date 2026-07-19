@@ -266,6 +266,25 @@ Full voice catalog: https://cloud.google.com/text-to-speech/docs/voices
 A physical push-button voice client using an ESP32 + INMP441 mic + MAX98357A speaker.  
 See [`esp32/voice_button.ino`](esp32/voice_button.ino) for the full Arduino sketch.
 
+### Connecting to a remote backend (via cloudflared tunnel)
+
+The sketch talks to the backend over `WSS /api/ws/voice`, streaming raw 16kHz PCM in and
+receiving raw 24kHz PCM back — no WAV framing on either side.
+
+1. Install the **"WebSockets" by Markus Sattler** library (Arduino IDE → Library Manager).
+2. Run `cloudflared tunnel --url http://localhost:8000` on the machine running the backend
+   (no need to bind uvicorn to `0.0.0.0` or open any firewall ports — cloudflared connects
+   outbound to Cloudflare's edge, so `127.0.0.1` is fine).
+3. In `voice_button.ino`, set `VPS_HOST` to the tunnel hostname it prints (e.g.
+   `abc-def-ghi.trycloudflare.com`, no `https://` prefix). Leave `VPS_PORT` at `443` —
+   cloudflared serves over standard HTTPS/wss, not the backend's local port.
+   The sketch calls `webSocket.beginSSL(...)` to speak `wss://` through the tunnel.
+   - This deployment has no auth on `/api/ws/voice` — anyone who finds the tunnel hostname
+     can trigger LLM/STT/TTS calls billed to your API keys. Fine for testing; put it behind
+     Cloudflare Access or similar auth before leaving it open long-term.
+   - A quick `trycloudflare.com` tunnel's hostname changes every time you restart cloudflared —
+     update `VPS_HOST` and re-flash (or use a named tunnel with a fixed hostname to avoid that).
+
 **Wiring:**
 
 | Component | ESP32 Pin |

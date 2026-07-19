@@ -7,10 +7,10 @@
 //   Arduino IDE Library Manager, search "WebSockets", then verify <WebSocketsClient.h> resolves.
 
 // ====== EDIT THESE ======================================================
-#define WIFI_SSID       "test1"
-#define WIFI_PASSWORD   "test1"
+#define WIFI_SSID       "test"
+#define WIFI_PASSWORD   "test12"
 
-#define VPS_HOST        "test1"     // cloudflared hostname, e.g. "abc-def-ghi.trycloudflare.com" — no "https://" prefix, no trailing slash
+#define VPS_HOST        "test123"     // cloudflared hostname, e.g. "abc-def-ghi.trycloudflare.com" — no "https://" prefix, no trailing slash
 #define VPS_PORT        443                        // cloudflared serves over standard HTTPS/wss port, not the backend's local --port
 #define VPS_WS_PATH     "/api/ws/voice"            // wss:// via cloudflared — still no auth (see backend README)
 // ========================================================================
@@ -20,9 +20,18 @@
 #define I2S_MIC_DOUT    6     // SD
 // INMP441: VDD->3.3V, GND->GND, L/R->GND
 
+#define TOUCH_PIN       1     // TTP223 touch module OUT pin
+// TTP223: VCC->3.3V, GND->GND, OUT->GPIO1. Assumes default (momentary) mode -
+// solder jumper NOT bridged - so OUT reads HIGH only while a finger is touching
+// the pad and LOW once released. If your module is bridged for latching/toggle
+// output instead, remove the jumper so OUT behaves momentarily.
+#define TOUCH_DEBOUNCE_MS 60    // ignore further taps within this long after one is recognized
+#define DOUBLE_TAP_WINDOW_MS 400   // two taps this close together (but each still past the debounce
+                                   // window above) count as one double-tap gesture
+
 #define SAMPLE_RATE_HZ   16000
 #define MIC_SHIFT           13     // PROVEN loud value from your bench test
-#define RECORD_SECONDS      15     // safety cap; recording normally stops early via "2"
+#define RECORD_SECONDS      15     // safety cap; recording normally stops early via a second tap
 #define RECORD_BUFFER_BYTES (SAMPLE_RATE_HZ * 2 * RECORD_SECONDS)
 
 #define I2S_SPK_BCLK    15    // MAX98357 BCLK
@@ -40,6 +49,16 @@ size_t   recBytes  = 0;
 int  g_volumePercent = 150;   // TTS playback volume: 0=mute, 100=unity gain, up to 150=boosted (may clip)
 bool wsConnected     = false;
 bool waitingForReply = false;
+
+// True from the moment a barge-in abort happens until the interrupted turn's own
+// "audio_end" arrives on the wire. The backend keeps streaming the old reply's
+// remaining bytes for a while after we've stopped listening for them locally (see
+// pushTtsBytes below) - this flag lets us silently discard exactly that leftover,
+// without touching state that now belongs to the new turn we've already started.
+bool ignoreIncomingAudio = false;
+
+bool     touchLastState = false;   // last-seen digitalRead(TOUCH_PIN), for rising-edge detection
+uint32_t touchLastTapMs = 0;       // millis() of the last recognized tap, for debouncing
 
 WebSocketsClient webSocket;
 
@@ -73,11 +92,35 @@ void writeWavHeader(uint8_t* h, uint32_t pcmBytes, uint32_t sr) {
   h[40]=pcmBytes; h[41]=pcmBytes>>8; h[42]=pcmBytes>>16; h[43]=pcmBytes>>24;
 }
 
-bool checkStopCommand() {
-  if (!Serial.available()) return false;
-  String line = Serial.readStringUntil('\n');
-  line.trim();
-  return line == "2";
+// Edge-triggered: returns true exactly once per physical tap (LOW->HIGH transition on
+// TOUCH_PIN), gated by a debounce window so contact bounce/noise can't register as
+// multiple taps. Safe to call from both loop() (to detect the start tap) and
+// recordUntilStop() (to detect the stop tap) since they never run in the same instant -
+// recordUntilStop() blocks loop() entirely until it returns.
+bool touchTapped() {
+  bool state = digitalRead(TOUCH_PIN) == HIGH;
+  bool tapped = state && !touchLastState && (millis() - touchLastTapMs > TOUCH_DEBOUNCE_MS);
+  touchLastState = state;
+  if (tapped) touchLastTapMs = millis();
+  return tapped;
+}
+
+// Call once per loop() with that iteration's touchTapped() result. Returns true only on the
+// second tap of a double-tap (two taps each individually past TOUCH_DEBOUNCE_MS apart, but
+// both within DOUBLE_TAP_WINDOW_MS of each other). A single tap that's never followed by a
+// second one within the window is silently absorbed - callers only ever see complete pairs.
+bool isDoubleTap(bool tapped) {
+  static uint32_t firstTapMs = 0;
+  static bool     armed = false;
+  if (!tapped) return false;
+  uint32_t now = millis();
+  if (armed && (now - firstTapMs) <= DOUBLE_TAP_WINDOW_MS) {
+    armed = false;
+    return true;
+  }
+  armed = true;
+  firstTapMs = now;
+  return false;
 }
 
 void recordUntilStop() {
@@ -104,7 +147,7 @@ void recordUntilStop() {
         recBytes += 2;
       }
     }
-    if (checkStopCommand()) stopRequested = true;
+    if (touchTapped()) stopRequested = true;
   }
   if (cnt == 0) { Serial.println("no samples"); return; }
 
@@ -161,22 +204,31 @@ void pushTtsBytes(const uint8_t* data, size_t len) {
   ttsFill += len;
 }
 
-// Paced consumer: called once per loop() iteration. Plays one small (~512-sample, ~21ms)
-// slice of buffered TTS audio (16-bit, 24kHz, mono, headerless — matches services/tts.py's
-// contract), then returns - I2S_speaker.write() blocks for ~21ms per slice, which naturally
-// paces playback at real-time without starving webSocket.loop() for long stretches.
+// Paced consumer: called once per loop() iteration. Always writes exactly one ~21ms slice to
+// I2S_speaker - real TTS audio (16-bit, 24kHz, mono, headerless — matches services/tts.py's
+// contract) if any is queued, otherwise silence to keep the amp's clock locked (see below).
+// I2S_speaker.write() blocks for ~21ms per slice either way, which naturally paces this
+// function's caller (loop()) at real-time without starving webSocket.loop() for long stretches.
 void drainTtsRing() {
+  const size_t sliceSamples = 512;
+  const size_t sliceBytes   = sliceSamples * 2;
+  uint8_t stereoBuf[sliceSamples * 4];  // MAX98357 needs a full L+R frame per sample
+
   if (ttsFill == 0) {
     if (audioEndReceived && waitingForReply) {
       waitingForReply = false;
       audioEndReceived = false;
       Serial.println("[WS] reply complete\n==================================================\n");
     }
+    // Keep BCLK/WS toggling continuously even with nothing queued. I2S DAC/amp combos like
+    // the MAX98357 need a steady clock to stay locked; going fully silent (no write() calls)
+    // lets it drift out of lock, so the first real samples of the next reply come out
+    // garbled while it re-syncs. Feeding zeros is cheap insurance against that every reply.
+    memset(stereoBuf, 0, sizeof(stereoBuf));
+    I2S_speaker.write(stereoBuf, sizeof(stereoBuf));
     return;
   }
 
-  const size_t sliceSamples = 512;
-  const size_t sliceBytes   = sliceSamples * 2;
   size_t n = min(sliceBytes, ttsFill) & ~size_t(1);   // keep 16-bit sample alignment
   if (n == 0) return;
 
@@ -187,7 +239,6 @@ void drainTtsRing() {
   if (firstPart < n) memcpy(raw + firstPart, ttsRing, n - firstPart);
 
   size_t samples = n / 2;
-  uint8_t stereoBuf[sliceSamples * 4];  // MAX98357 needs a full L+R frame per sample
   for (size_t s = 0; s < samples; s++) {
     int16_t sample = (int16_t)(raw[s * 2] | (raw[s * 2 + 1] << 8));
     int32_t scaled = ((int32_t)sample * g_volumePercent) / 100;
@@ -214,6 +265,7 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
       wsConnected = false;
       waitingForReply = false;
       audioEndReceived = false;
+      ignoreIncomingAudio = false;
       ttsHead = ttsTail = ttsFill = 0;   // discard any partial audio from the interrupted turn
       Serial.println("[WS] disconnected — will auto-reconnect");
       break;
@@ -230,21 +282,33 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
       } else if (t == "reply") {
         Serial.printf("ASSISTANT:\n  \"%s\"\n", (const char*)(doc["text"] | ""));
       } else if (t == "audio_end") {
-        // Bytes may still be buffered/playing in the ring - drainTtsRing() clears
-        // waitingForReply once playback actually finishes, not just once received.
-        audioEndReceived = true;
-        Serial.println("[WS] reply fully received, finishing playback...");
+        if (ignoreIncomingAudio) {
+          // This is the boundary marker for the turn we barged in on - everything
+          // from here on belongs to the new turn we already started.
+          ignoreIncomingAudio = false;
+          Serial.println("[WS] (discarded remainder of interrupted reply)");
+        } else {
+          // Bytes may still be buffered/playing in the ring - drainTtsRing() clears
+          // waitingForReply once playback actually finishes, not just once received.
+          audioEndReceived = true;
+          Serial.println("[WS] reply fully received, finishing playback...");
+        }
       } else if (t == "error") {
-        waitingForReply = false;
-        audioEndReceived = false;
-        ttsHead = ttsTail = ttsFill = 0;   // discard any partial audio for the failed turn
-        Serial.printf("[WS] error: %s\n", (const char*)(doc["detail"] | ""));
+        if (ignoreIncomingAudio) {
+          ignoreIncomingAudio = false;
+          Serial.printf("[WS] (interrupted turn errored after barge-in: %s)\n", (const char*)(doc["detail"] | ""));
+        } else {
+          waitingForReply = false;
+          audioEndReceived = false;
+          ttsHead = ttsTail = ttsFill = 0;   // discard any partial audio for the failed turn
+          Serial.printf("[WS] error: %s\n", (const char*)(doc["detail"] | ""));
+        }
       }
       break;
     }
 
     case WStype_BIN:
-      pushTtsBytes(payload, length);
+      if (!ignoreIncomingAudio) pushTtsBytes(payload, length);
       break;
 
     case WStype_ERROR:
@@ -259,7 +323,9 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
 void setup() {
   Serial.begin(115200);
   delay(500);
-  Serial.printf("\n=== SPEAK_ROBOT serial-triggered | MIC_SHIFT=%d ===\n", MIC_SHIFT);
+  Serial.printf("\n=== SPEAK_ROBOT touch-triggered | MIC_SHIFT=%d ===\n", MIC_SHIFT);
+
+  pinMode(TOUCH_PIN, INPUT);
 
   if (!psramFound()) Serial.println("WARNING: PSRAM not found - set Tools->PSRAM=OPI PSRAM");
   recBuffer = (uint8_t*) ps_malloc(RECORD_BUFFER_BYTES);
@@ -310,39 +376,45 @@ void loop() {
   webSocket.loop();   // must run every cycle to process the socket and keep it alive
   drainTtsRing();     // play back one small (~21ms) slice of buffered TTS audio, if any is queued
 
-  if (!Serial.available()) {
-    if (ttsFill == 0) delay(20);   // only idle-delay once there's nothing left to play - otherwise
-                                    // we fall behind real-time draining a multi-second reply
-    return;
+  // Volume is still adjustable over serial for bench tuning - doesn't conflict with the touch trigger.
+  if (Serial.available()) {
+    String line = Serial.readStringUntil('\n');
+    line.trim();
+    if (line.startsWith("v") || line.startsWith("V")) {
+      int v = line.substring(1).toInt();
+      if (v < 0) v = 0;
+      if (v > 150) v = 150;
+      g_volumePercent = v;
+      Serial.printf("Volume set to %d%%\n", g_volumePercent);
+    }
   }
 
-  String line = Serial.readStringUntil('\n');
-  line.trim();
+  bool tapped = touchTapped();
 
-  if (line.startsWith("v") || line.startsWith("V")) {
-    int v = line.substring(1).toInt();
-    if (v < 0) v = 0;
-    if (v > 150) v = 150;
-    g_volumePercent = v;
-    Serial.printf("Volume set to %d%%\n", g_volumePercent);
-    return;
+  if (waitingForReply) {
+    // A reply is playing/pending: only a double-tap stops it, and it stops audio only -
+    // it does NOT start a new recording. That keeps a single stray tap during playback
+    // from being misread as "stop and immediately start listening."
+    if (isDoubleTap(tapped)) {
+      Serial.println("[WS] double-tap - stopping playback");
+      ttsHead = ttsTail = ttsFill = 0;
+      ignoreIncomingAudio = true;   // discard the interrupted turn's remaining bytes (see flag comment above)
+      waitingForReply = false;
+      audioEndReceived = false;
+    }
+    return;   // drainTtsRing() above already paces this loop at ~21ms/iteration via its I2S write
   }
 
-  if (line != "1") {
-    Serial.println("Ignored - type 1 to start recording, or v<0-150> to set volume.");
-    return;
+  if (!tapped) {
+    return;   // drainTtsRing() above already paces this loop at ~21ms/iteration via its I2S write
   }
 
   if (!wsConnected) {
     Serial.println("Not connected to backend yet - try again shortly.");
     return;
   }
-  if (waitingForReply) {
-    Serial.println("Still waiting on the previous reply - try again shortly.");
-    return;
-  }
 
-  Serial.println(">>> RECORDING... type 2 + Enter to stop <<<");
+  Serial.println(">>> RECORDING... tap the touch pad again to stop <<<");
   recordUntilStop();
   Serial.println("==================================================");
   sendAudioToBackend();

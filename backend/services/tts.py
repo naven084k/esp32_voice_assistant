@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import io
 import os
@@ -12,6 +13,7 @@ from services.request_timer import get_timer
 
 SAMPLE_RATE = 24000
 DEFAULT_VOICE = "en-IN-Neural2-B"
+VOLUME_GAIN_DB = 10.0  # Google's neural voices synthesize quieter than OpenAI's TTS by default (0dB); boost at the source rather than relying solely on the ESP32's digital gain, which clips more easily. Range: -96.0 to 16.0.
 
 VOICES = {
     "en-US-Neural2-A", "en-US-Neural2-C", "en-US-Neural2-D",
@@ -23,7 +25,11 @@ VOICES = {
 
 _TTS_URL = "https://texttospeech.googleapis.com/v1/text:synthesize"
 _MAX_CHARS = 1000  # Google Cloud TTS accepts up to 5,000 bytes of input per request
-_CHUNK_BYTES = 32768
+_CHUNK_BYTES = 8192  # ESP32 "WebSockets" client hard-caps incoming frames at WEBSOCKETS_MAX_DATA_SIZE (15*1024);
+# anything larger gets silently disconnected (close code 1009) before the sketch's callback even runs.
+
+_BYTES_PER_SECOND = SAMPLE_RATE * 2  # 16-bit mono PCM real-time playback rate (48000 B/s)
+_MAX_LEAD_SECONDS = 2.0  # allow the backend to run this far ahead of real-time before throttling
 
 TTS_PROVIDER = os.environ.get("TTS_PROVIDER", "google").lower()
 LOCAL_TTS_VOICE = os.environ.get("LOCAL_TTS_VOICE", "").strip()
@@ -67,7 +73,7 @@ async def _synthesize_pcm(text: str, voice: str) -> bytes:
     payload = {
         "input": {"text": text},
         "voice": {"languageCode": _language_code(voice), "name": voice},
-        "audioConfig": {"audioEncoding": "LINEAR16", "sampleRateHertz": SAMPLE_RATE},
+        "audioConfig": {"audioEncoding": "LINEAR16", "sampleRateHertz": SAMPLE_RATE, "volumeGainDb": VOLUME_GAIN_DB},
     }
 
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -183,16 +189,34 @@ async def _local_synthesize_stream(text: str) -> AsyncIterator[bytes]:
         yield pcm[i : i + _CHUNK_BYTES]
 
 
-async def synthesize_stream(text: str, voice: str = DEFAULT_VOICE) -> AsyncIterator[bytes]:
+async def _pace_chunks(chunks: AsyncIterator[bytes], start: float, pace: bool) -> AsyncIterator[bytes]:
+    """Rate-limit an async byte-chunk stream to ~real-time playback speed.
+    `start` = perf_counter() at t=0 of the stream (captured before synthesis begins,
+    so synthesis time already counts toward the real-time budget)."""
+    sent_bytes = 0
+    async for chunk in chunks:
+        sent_bytes += len(chunk)
+        if pace:
+            target_elapsed = sent_bytes / _BYTES_PER_SECOND
+            actual_elapsed = time.perf_counter() - start
+            lead = target_elapsed - actual_elapsed
+            if lead > _MAX_LEAD_SECONDS:
+                await asyncio.sleep(lead - _MAX_LEAD_SECONDS)
+        yield chunk
+
+
+async def synthesize_stream(text: str, voice: str = DEFAULT_VOICE, pace: bool = False) -> AsyncIterator[bytes]:
     if TTS_PROVIDER == "local":
         start = time.perf_counter()
         total_bytes = 0
         first_chunk_elapsed = None
-        async for chunk in _local_synthesize_stream(text):
+        async for chunk in _pace_chunks(_local_synthesize_stream(text), start, pace):
             if first_chunk_elapsed is None:
                 first_chunk_elapsed = time.perf_counter() - start
             total_bytes += len(chunk)
             yield chunk
+        # NOTE: elapsed includes real-time pacing sleep when pace=True — this is expected
+        # (reflects true end-to-end stream duration), not a regression.
         elapsed = time.perf_counter() - start
         t = get_timer()
         if t:
@@ -207,15 +231,20 @@ async def synthesize_stream(text: str, voice: str = DEFAULT_VOICE) -> AsyncItera
     total_bytes = 0
     first_chunk_elapsed = None
 
-    for sentence in _split_sentences(text):
-        pcm = await _synthesize_pcm(sentence, voice)
-        for i in range(0, len(pcm), _CHUNK_BYTES):
-            chunk = pcm[i : i + _CHUNK_BYTES]
-            if first_chunk_elapsed is None:
-                first_chunk_elapsed = time.perf_counter() - start
-            total_bytes += len(chunk)
-            yield chunk
+    async def _raw_google_chunks():
+        for sentence in _split_sentences(text):
+            pcm = await _synthesize_pcm(sentence, voice)
+            for i in range(0, len(pcm), _CHUNK_BYTES):
+                yield pcm[i : i + _CHUNK_BYTES]
 
+    async for chunk in _pace_chunks(_raw_google_chunks(), start, pace):
+        if first_chunk_elapsed is None:
+            first_chunk_elapsed = time.perf_counter() - start
+        total_bytes += len(chunk)
+        yield chunk
+
+    # NOTE: elapsed includes real-time pacing sleep when pace=True — this is expected
+    # (reflects true end-to-end stream duration), not a regression.
     elapsed = time.perf_counter() - start
     t = get_timer()
     if t:

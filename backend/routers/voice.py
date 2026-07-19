@@ -102,7 +102,7 @@ async def voice_ws(websocket: WebSocket):
                         reply = await llm.process(transcript, thread_id=config["thread_id"], system_prompt=config["system_prompt"])
                         await websocket.send_json({"type": "reply", "text": reply})
 
-                        async for chunk in tts.synthesize_stream(reply, config["voice"]):
+                        async for chunk in tts.synthesize_stream(reply, config["voice"], pace=True):
                             await websocket.send_bytes(chunk)
 
                         await websocket.send_json({"type": "audio_end"})

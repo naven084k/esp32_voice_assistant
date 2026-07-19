@@ -5,14 +5,23 @@
 #include <WebSocketsClient.h>
 // ^ Library: "WebSockets" by Markus Sattler (Links2004/arduinoWebSockets) — install via
 //   Arduino IDE Library Manager, search "WebSockets", then verify <WebSocketsClient.h> resolves.
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+// ^ Libraries: "Adafruit SSD1306" + "Adafruit GFX Library" (Adafruit BusIO comes along
+//   as a dependency) — status OLED, see the "OLED status display" section below.
 
 // ====== EDIT THESE ======================================================
 #define WIFI_SSID       "test"
-#define WIFI_PASSWORD   "test12"
+#define WIFI_PASSWORD   "test"
 
-#define VPS_HOST        "test123"     // cloudflared hostname, e.g. "abc-def-ghi.trycloudflare.com" — no "https://" prefix, no trailing slash
+#define VPS_HOST        "test123"     // cloudflared host, e.g. "abc-def-ghi.trycloudflare.com" — no "https://" prefix, no trailing slash
 #define VPS_PORT        443                        // cloudflared serves over standard HTTPS/wss port, not the backend's local --port
 #define VPS_WS_PATH     "/api/ws/voice"            // wss:// via cloudflared — still no auth (see backend README)
+
+#define OLED_SDA        8     // status display (SSD1306 128x64 I2C)
+#define OLED_SCL        9
+#define OLED_I2C_ADDR   0x3C  // try 0x3D if display.begin() fails
 // ========================================================================
 
 #define I2S_MIC_BCLK    4     // SCK
@@ -73,6 +82,170 @@ size_t   ttsHead = 0;   // next write index (producer: pushTtsBytes)
 size_t   ttsTail = 0;   // next read index  (consumer: drainTtsRing)
 size_t   ttsFill = 0;   // bytes currently buffered
 bool     audioEndReceived = false;   // true once the "audio_end" text message has arrived
+bool     speakingShown    = false;   // set once STATE_SPEAKING has been shown for the current reply
+
+// ====================== OLED status display (SSD1306 128x64 I2C) ======================
+// Icon-only state screen: mic outline (idle), animated waveform (recording), hourglass
+// (processing), speaker (speaking), warning triangle (error) — plus a top-bar WiFi icon
+// and an optional one-line truncated subtitle (e.g. the transcript). No paragraphs of text.
+
+Adafruit_SSD1306 display(128, 64, &Wire, -1);
+
+enum AssistantState { STATE_IDLE, STATE_RECORDING, STATE_PROCESSING, STATE_SPEAKING, STATE_ERROR };
+enum ErrorKind { ERR_WIFI, ERR_MIC, ERR_API, ERR_GENERIC };
+
+AssistantState g_state         = STATE_IDLE;
+ErrorKind      g_errorKind     = ERR_GENERIC;
+bool           g_wifiConnected = false;
+char           g_subtitle[22]  = "";
+uint32_t       g_animFrame     = 0;
+uint32_t       g_lastAnimMs    = 0;
+#define ANIM_INTERVAL_MS 150
+
+static const int16_t ICON_CX = 64, ICON_CY = 29, LABEL_Y = 46, SUBTITLE_Y = 56;
+
+void drawWifiIcon(int16_t x, int16_t y) {
+  int16_t cx = x + 6, cy = y + 8;
+  display.drawCircleHelper(cx, cy, 7, 0x3, SSD1306_WHITE);
+  display.drawCircleHelper(cx, cy, 4, 0x3, SSD1306_WHITE);
+  display.fillCircle(cx, cy, 1, SSD1306_WHITE);
+  if (!g_wifiConnected) display.drawLine(x, y, x + 12, y + 11, SSD1306_WHITE);
+}
+
+void drawSleepIcon(int16_t cx, int16_t cy) {
+  int16_t r = 9;
+  display.fillCircle(cx, cy, r, SSD1306_WHITE);
+  display.fillCircle(cx + 5, cy - 4, r, SSD1306_BLACK);   // carve a crescent moon
+  display.setTextSize(1);
+  display.setCursor(cx + 7, cy - r - 6);
+  display.print("z");
+  display.setCursor(cx + 13, cy - r - 1);
+  display.print("Z");
+}
+
+void drawWaveformIcon(int16_t cx, int16_t cy) {
+  static const uint8_t heights[8][5] = {
+    { 6, 10, 16, 10,  6}, {10, 16,  8, 16, 10}, {16,  8, 12,  8, 16}, { 8, 14, 18, 14,  8},
+    { 6, 12, 20, 12,  6}, {12, 18, 10, 18, 12}, {18, 10, 14, 10, 18}, {10,  6, 10,  6, 10},
+  };
+  const uint8_t* h = heights[g_animFrame % 8];
+  int16_t barW = 4, gap = 3;
+  int16_t startX = cx - (5 * barW + 4 * gap) / 2;
+  for (int i = 0; i < 5; i++) {
+    int16_t x = startX + i * (barW + gap);
+    display.fillRect(x, cy - h[i] / 2, barW, h[i], SSD1306_WHITE);
+  }
+}
+
+void drawHourglassIcon(int16_t cx, int16_t cy) {
+  int16_t w = 14, h = 20;
+  int16_t left = cx - w / 2, right = cx + w / 2, top = cy - h / 2, bottom = cy + h / 2;
+  display.drawTriangle(left, top, right, top, cx, cy, SSD1306_WHITE);
+  display.drawTriangle(left, bottom, right, bottom, cx, cy, SSD1306_WHITE);
+  display.drawFastHLine(left - 1, top, w + 2, SSD1306_WHITE);
+  display.drawFastHLine(left - 1, bottom, w + 2, SSD1306_WHITE);
+  int16_t sandY = cy + 2 + (g_animFrame % 6);
+  if (sandY < bottom - 1) display.fillRect(cx - 1, sandY, 2, 2, SSD1306_WHITE);
+}
+
+void drawSpeakerIcon(int16_t cx, int16_t cy) {
+  int16_t bx = cx - 12, by = cy - 5;
+  display.fillRect(bx, by, 5, 10, SSD1306_WHITE);
+  display.fillTriangle(bx + 5, by, bx + 5, by + 10, bx + 14, cy - 9, SSD1306_WHITE);
+  display.fillTriangle(bx + 5, by + 10, bx + 14, cy - 9, bx + 14, cy + 9, SSD1306_WHITE);
+  display.drawCircleHelper(bx + 14, cy, 5, 0x6, SSD1306_WHITE);
+  if ((g_animFrame % 4) < 2) display.drawCircleHelper(bx + 14, cy, 9, 0x6, SSD1306_WHITE);
+}
+
+const char* errorLabel() {
+  switch (g_errorKind) {
+    case ERR_WIFI: return "WIFI LOST";
+    case ERR_MIC:  return "MIC ERROR";
+    case ERR_API:  return "API ERROR";
+    default:       return "ERROR";
+  }
+}
+
+void drawErrorIcon(int16_t cx, int16_t cy) {
+  int16_t r = 11;
+  display.drawTriangle(cx, cy - r, cx - r, cy + r - 2, cx + r, cy + r - 2, SSD1306_WHITE);
+  display.setTextSize(1);
+  display.setCursor(cx - 1, cy - 2);
+  display.print("!");
+}
+
+void drawLabel(const char* text) {
+  int16_t w = strlen(text) * 6;
+  display.setTextSize(1);
+  display.setCursor((128 - w) / 2, LABEL_Y);
+  display.print(text);
+}
+
+void drawFrame() {
+  display.clearDisplay();
+  display.drawFastHLine(0, 11, 128, SSD1306_WHITE);
+  drawWifiIcon(128 - 14, 0);
+
+  switch (g_state) {
+    case STATE_IDLE:       drawSleepIcon(ICON_CX, ICON_CY);     drawLabel("SLEEP");      break;
+    case STATE_RECORDING:  drawWaveformIcon(ICON_CX, ICON_CY);  drawLabel("LISTENING");  break;
+    case STATE_PROCESSING: drawHourglassIcon(ICON_CX, ICON_CY); drawLabel("THINKING");   break;
+    case STATE_SPEAKING:   drawSpeakerIcon(ICON_CX, ICON_CY);   drawLabel("SPEAKING");   break;
+    case STATE_ERROR:      drawErrorIcon(ICON_CX, ICON_CY);     drawLabel(errorLabel()); break;
+  }
+
+  if (g_subtitle[0] != '\0') {
+    display.setTextSize(1);
+    display.setCursor(0, SUBTITLE_Y);
+    display.print(g_subtitle);
+  }
+  display.display();
+}
+
+void displayInit() {
+  Wire.begin(OLED_SDA, OLED_SCL);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_I2C_ADDR)) {
+    Serial.println("WARNING: SSD1306 init failed (check wiring/I2C address) - continuing without display");
+    return;
+  }
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextWrap(false);
+  drawFrame();
+}
+
+// Call whenever the assistant's state changes. subtitle is optional (e.g. first few words
+// of a transcript) and is truncated to fit one line - pass "" (or omit) for none.
+void updateDisplay(AssistantState newState, const char* subtitle = "") {
+  g_state = newState;
+  g_animFrame = 0;
+  g_lastAnimMs = millis();
+  strncpy(g_subtitle, subtitle, sizeof(g_subtitle) - 1);
+  g_subtitle[sizeof(g_subtitle) - 1] = '\0';
+  drawFrame();
+}
+
+void setDisplayError(ErrorKind kind) {
+  g_errorKind = kind;
+  updateDisplay(STATE_ERROR);
+}
+
+void setWifiConnected(bool connected) {
+  if (connected == g_wifiConnected) return;
+  g_wifiConnected = connected;
+  drawFrame();
+}
+
+// Call once per loop() iteration. Cheap: only redraws every ANIM_INTERVAL_MS, and only
+// for states that actually animate (idle/error are static) - safe to run alongside I2S.
+void tickDisplay() {
+  if (g_state == STATE_IDLE || g_state == STATE_ERROR) return;
+  uint32_t now = millis();
+  if (now - g_lastAnimMs < ANIM_INTERVAL_MS) return;
+  g_lastAnimMs = now;
+  g_animFrame++;
+  drawFrame();
+}
+// ================== end OLED status display ==================
 
 void writeWavHeader(uint8_t* h, uint32_t pcmBytes, uint32_t sr) {
   uint32_t fileSize = pcmBytes + 36;
@@ -182,6 +355,8 @@ void sendAudioToBackend() {
   webSocket.sendTXT("{\"type\":\"end\"}");
   waitingForReply = true;
   audioEndReceived = false;
+  speakingShown = false;
+  updateDisplay(STATE_PROCESSING);
   Serial.printf("[WS] sent (%.1fs), waiting for reply...\n", (millis() - t0) / 1000.0f);
 }
 
@@ -218,6 +393,8 @@ void drainTtsRing() {
     if (audioEndReceived && waitingForReply) {
       waitingForReply = false;
       audioEndReceived = false;
+      speakingShown = false;
+      updateDisplay(STATE_IDLE);
       Serial.println("[WS] reply complete\n==================================================\n");
     }
     // Keep BCLK/WS toggling continuously even with nothing queued. I2S DAC/amp combos like
@@ -231,6 +408,11 @@ void drainTtsRing() {
 
   size_t n = min(sliceBytes, ttsFill) & ~size_t(1);   // keep 16-bit sample alignment
   if (n == 0) return;
+
+  if (!speakingShown) {
+    speakingShown = true;
+    updateDisplay(STATE_SPEAKING);
+  }
 
   uint8_t raw[sliceBytes];
   size_t firstPart = TTS_RING_BYTES - ttsTail;
@@ -258,6 +440,7 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
     case WStype_CONNECTED:
       wsConnected = true;
+      updateDisplay(STATE_IDLE);
       Serial.println("[WS] connected to backend");
       break;
 
@@ -266,7 +449,9 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
       waitingForReply = false;
       audioEndReceived = false;
       ignoreIncomingAudio = false;
+      speakingShown = false;
       ttsHead = ttsTail = ttsFill = 0;   // discard any partial audio from the interrupted turn
+      setDisplayError(ERR_WIFI);
       Serial.println("[WS] disconnected — will auto-reconnect");
       break;
 
@@ -278,7 +463,9 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
       }
       String t = doc["type"] | "";
       if (t == "transcript") {
-        Serial.printf("YOU SAID:\n  \"%s\"\n", (const char*)(doc["text"] | ""));
+        const char* heard = (const char*)(doc["text"] | "");
+        Serial.printf("YOU SAID:\n  \"%s\"\n", heard);
+        updateDisplay(STATE_PROCESSING, heard);   // STT done, LLM/TTS still pending
       } else if (t == "reply") {
         Serial.printf("ASSISTANT:\n  \"%s\"\n", (const char*)(doc["text"] | ""));
       } else if (t == "audio_end") {
@@ -300,7 +487,9 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
         } else {
           waitingForReply = false;
           audioEndReceived = false;
+          speakingShown = false;
           ttsHead = ttsTail = ttsFill = 0;   // discard any partial audio for the failed turn
+          setDisplayError(ERR_API);
           Serial.printf("[WS] error: %s\n", (const char*)(doc["detail"] | ""));
         }
       }
@@ -334,12 +523,15 @@ void setup() {
   ttsRing = (uint8_t*) ps_malloc(TTS_RING_BYTES);
   if (!ttsRing) { Serial.println("FATAL: ps_malloc (tts ring) failed"); while (true) delay(1000); }
 
+  displayInit();   // early, so mic/WiFi init failures below can still show an error icon
+
   I2S_mic.setPins(I2S_MIC_BCLK, I2S_MIC_LRCL, -1, I2S_MIC_DOUT);
   if (!I2S_mic.begin(I2S_MODE_STD, SAMPLE_RATE_HZ,
                      I2S_DATA_BIT_WIDTH_32BIT,
                      I2S_SLOT_MODE_MONO,
                      I2S_STD_SLOT_LEFT)) {     // if words never come, try I2S_STD_SLOT_RIGHT
     Serial.println("FATAL: I2S mic init failed");
+    setDisplayError(ERR_MIC);
     while (true) delay(1000);
   }
 
@@ -360,7 +552,13 @@ void setup() {
   uint32_t t0 = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - t0 < 20000) { Serial.print("."); delay(300); }
   Serial.println();
-  if (WiFi.status() != WL_CONNECTED) { Serial.println("FATAL: WiFi failed"); while (true) delay(1000); }
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("FATAL: WiFi failed");
+    setDisplayError(ERR_WIFI);
+    while (true) delay(1000);
+  }
+  setWifiConnected(true);
+  updateDisplay(STATE_IDLE);
   Serial.printf("WiFi OK  IP=%s  RSSI=%d dBm\n",
                 WiFi.localIP().toString().c_str(), WiFi.RSSI());
 
@@ -375,6 +573,13 @@ void setup() {
 void loop() {
   webSocket.loop();   // must run every cycle to process the socket and keep it alive
   drainTtsRing();     // play back one small (~21ms) slice of buffered TTS audio, if any is queued
+  tickDisplay();      // advance any in-progress icon animation (no-op most iterations)
+
+  static uint32_t lastWifiCheckMs = 0;
+  if (millis() - lastWifiCheckMs > 2000) {
+    lastWifiCheckMs = millis();
+    setWifiConnected(WiFi.status() == WL_CONNECTED);
+  }
 
   // Volume is still adjustable over serial for bench tuning - doesn't conflict with the touch trigger.
   if (Serial.available()) {
@@ -401,6 +606,8 @@ void loop() {
       ignoreIncomingAudio = true;   // discard the interrupted turn's remaining bytes (see flag comment above)
       waitingForReply = false;
       audioEndReceived = false;
+      speakingShown = false;
+      updateDisplay(STATE_IDLE);
     }
     return;   // drainTtsRing() above already paces this loop at ~21ms/iteration via its I2S write
   }
@@ -415,6 +622,7 @@ void loop() {
   }
 
   Serial.println(">>> RECORDING... tap the touch pad again to stop <<<");
+  updateDisplay(STATE_RECORDING);
   recordUntilStop();
   Serial.println("==================================================");
   sendAudioToBackend();

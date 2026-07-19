@@ -7,10 +7,10 @@
 //   Arduino IDE Library Manager, search "WebSockets", then verify <WebSocketsClient.h> resolves.
 
 // ====== EDIT THESE ======================================================
-#define WIFI_SSID       "test"
-#define WIFI_PASSWORD   "test"
+#define WIFI_SSID       "test1"
+#define WIFI_PASSWORD   "test1"
 
-#define VPS_HOST        "test"     // cloudflared hostname, e.g. "abc-def-ghi.trycloudflare.com" — no "https://" prefix, no trailing slash
+#define VPS_HOST        "test1"     // cloudflared hostname, e.g. "abc-def-ghi.trycloudflare.com" — no "https://" prefix, no trailing slash
 #define VPS_PORT        443                        // cloudflared serves over standard HTTPS/wss port, not the backend's local --port
 #define VPS_WS_PATH     "/api/ws/voice"            // wss:// via cloudflared — still no auth (see backend README)
 // ========================================================================

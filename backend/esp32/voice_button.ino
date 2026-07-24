@@ -10,18 +10,24 @@
 #include <Adafruit_SSD1306.h>
 // ^ Libraries: "Adafruit SSD1306" + "Adafruit GFX Library" (Adafruit BusIO comes along
 //   as a dependency) — status OLED, see the "OLED status display" section below.
+#include <time.h>   // NTP-synced clock for the idle screen's occasional time display
+#include <math.h>   // sinf/lroundf for the idle face's breathing animation
 
 // ====== EDIT THESE ======================================================
 #define WIFI_SSID       "test"
 #define WIFI_PASSWORD   "test"
 
-#define VPS_HOST        "test123"     // cloudflared host, e.g. "abc-def-ghi.trycloudflare.com" — no "https://" prefix, no trailing slash
+#define VPS_HOST        "test"     // cloudflared host, e.g. "abc-def-ghi.trycloudflare.com" — no "https://" prefix, no trailing slash
 #define VPS_PORT        443                        // cloudflared serves over standard HTTPS/wss port, not the backend's local --port
 #define VPS_WS_PATH     "/api/ws/voice"            // wss:// via cloudflared — still no auth (see backend README)
 
 #define OLED_SDA        8     // status display (SSD1306 128x64 I2C)
 #define OLED_SCL        9
 #define OLED_I2C_ADDR   0x3C  // try 0x3D if display.begin() fails
+
+#define NTP_SERVER      "pool.ntp.org"
+#define GMT_OFFSET_SEC  19800 // IST (Hyderabad) = UTC+5:30 = 5*3600 + 30*60
+#define DST_OFFSET_SEC  0     // India does not observe daylight saving
 // ========================================================================
 
 #define I2S_MIC_BCLK    4     // SCK
@@ -33,14 +39,13 @@
 // TTP223: VCC->3.3V, GND->GND, OUT->GPIO1. Assumes default (momentary) mode -
 // solder jumper NOT bridged - so OUT reads HIGH only while a finger is touching
 // the pad and LOW once released. If your module is bridged for latching/toggle
-// output instead, remove the jumper so OUT behaves momentarily.
-#define TOUCH_DEBOUNCE_MS 60    // ignore further taps within this long after one is recognized
-#define DOUBLE_TAP_WINDOW_MS 400   // two taps this close together (but each still past the debounce
-                                   // window above) count as one double-tap gesture
+// output instead, remove the jumper so OUT behaves momentarily. Press-and-hold is
+// the whole interaction model: hold the pad to listen, release it to send.
+#define TOUCH_DEBOUNCE_MS 60    // ignore state changes within this long of the last recognized one
 
 #define SAMPLE_RATE_HZ   16000
 #define MIC_SHIFT           13     // PROVEN loud value from your bench test
-#define RECORD_SECONDS      15     // safety cap; recording normally stops early via a second tap
+#define RECORD_SECONDS      15     // safety cap; recording normally stops early on touch release
 #define RECORD_BUFFER_BYTES (SAMPLE_RATE_HZ * 2 * RECORD_SECONDS)
 
 #define I2S_SPK_BCLK    15    // MAX98357 BCLK
@@ -49,6 +54,13 @@
 // MAX98357: VIN->5V(or 3.3V), GND->GND, SD->3.3V (enables mono L+R mix output)
 
 #define TTS_SAMPLE_RATE_HZ 24000   // must match services/tts.py SAMPLE_RATE on the backend
+
+// How often to feed the speaker a silent I2S slice while recordUntilStop()/sendAudioToBackend()
+// are otherwise blocking loop() (and therefore drainTtsRing()) for seconds at a time. Without
+// this, the MAX98357 loses its BCLK/WS clock lock during that gap and the first ~1-2s of the
+// *next* reply comes out as noise/static while it re-syncs. Tunable: shorten if noise persists,
+// lengthen only if it turns out to cost recording quality (unlikely - see feedSilentSlice() call sites).
+#define SPEAKER_KEEPALIVE_MS 200
 
 I2SClass I2S_mic;
 I2SClass I2S_speaker;
@@ -85,9 +97,10 @@ bool     audioEndReceived = false;   // true once the "audio_end" text message h
 bool     speakingShown    = false;   // set once STATE_SPEAKING has been shown for the current reply
 
 // ====================== OLED status display (SSD1306 128x64 I2C) ======================
-// Icon-only state screen: mic outline (idle), animated waveform (recording), hourglass
-// (processing), speaker (speaking), warning triangle (error) — plus a top-bar WiFi icon
-// and an optional one-line truncated subtitle (e.g. the transcript). No paragraphs of text.
+// Icon-only state screen: blinking face rotating with a clock (idle), animated waveform
+// (recording), hourglass (processing), speaker (speaking), warning triangle (error) —
+// plus a top-bar WiFi icon, a boot "eyes opening" animation, and an optional one-line
+// truncated subtitle (e.g. the transcript). No paragraphs of text.
 
 Adafruit_SSD1306 display(128, 64, &Wire, -1);
 
@@ -100,7 +113,36 @@ bool           g_wifiConnected = false;
 char           g_subtitle[22]  = "";
 uint32_t       g_animFrame     = 0;
 uint32_t       g_lastAnimMs    = 0;
-#define ANIM_INTERVAL_MS 150
+#define ANIM_INTERVAL_MS 300
+
+bool ntpSynced = false;   // set once in setup() after a successful NTP fetch; gates the idle clock screen
+
+// ---- idle screen: rotates between the face and (if NTP is synced) a small clock ----
+bool     g_showClock      = false;
+uint32_t g_idleRotateAtMs = 0;
+#define IDLE_FACE_MS   12000   // how long the face stays up per idle rotation
+#define IDLE_CLOCK_MS  4000    // how long the clock stays up before flipping back to the face
+
+// ---- mood: a brief blink-then-settle animation, played on top of the idle face for
+// personality on a successful interaction. Purely cosmetic - tickDisplay() only redraws
+// for it a few times over well under a second, so it can't add latency to the audio path.
+uint32_t g_moodStartMs = 0;
+uint32_t g_moodUntilMs = 0;   // nonzero while a mood animation is playing
+
+void playMood(uint32_t durationMs) {
+  g_moodStartMs = millis();
+  g_moodUntilMs = g_moodStartMs + durationMs;
+}
+
+// ---- idle "breathing + curious glance": makes the resting face read as alive/waiting
+// instead of a static stare. Breathing is a continuous slow size pulse; glances are a
+// periodic brief pupil nudge left/right/up, both purely cosmetic (driven off millis()).
+#define BREATH_PERIOD_MS   2000
+#define GLANCE_DURATION_MS 600
+bool     g_glancing      = false;
+int8_t   g_glanceDir     = 0;    // 0=left, 1=right, 2=up
+uint32_t g_glanceUntilMs = 0;
+uint32_t g_nextGlanceMs  = 0;    // scheduled time of the next glance
 
 static const int16_t ICON_CX = 64, ICON_CY = 29, LABEL_Y = 46, SUBTITLE_Y = 56;
 
@@ -112,15 +154,67 @@ void drawWifiIcon(int16_t x, int16_t y) {
   if (!g_wifiConnected) display.drawLine(x, y, x + 12, y + 11, SSD1306_WHITE);
 }
 
-void drawSleepIcon(int16_t cx, int16_t cy) {
-  int16_t r = 9;
-  display.fillCircle(cx, cy, r, SSD1306_WHITE);
-  display.fillCircle(cx + 5, cy - 4, r, SSD1306_BLACK);   // carve a crescent moon
-  display.setTextSize(1);
-  display.setCursor(cx + 7, cy - r - 6);
-  display.print("z");
-  display.setCursor(cx + 13, cy - r - 1);
-  display.print("Z");
+// Two round eyes plus a permanent smile arc, centered - a proper smiley face. Eyes are
+// normally open; briefly close then settle into a curved "happy" shape while a mood
+// animation (see playMood) is active.
+void drawFaceIcon(int16_t cx, int16_t cy) {
+  int8_t eyeShape = 0;   // 0 = open, 1 = closed (blink), 2 = happy/curious (curved)
+  if (g_moodUntilMs != 0) {
+    uint32_t elapsed = millis() - g_moodStartMs;
+    eyeShape = (elapsed < 300 && (elapsed / 100) % 2 == 0) ? 1 : 2;
+  }
+
+  // Breathing: eye/smile radius pulses +/-1px on a slow sine cycle.
+  float breath = sinf((millis() % BREATH_PERIOD_MS) / (float)BREATH_PERIOD_MS * 2 * PI);
+  int16_t eyeR   = 4 + (int16_t)lroundf(breath);   // 3..5
+  int16_t smileR = 8 + (int16_t)lroundf(breath);   // 7..9
+
+  // Curious glance: while eyes are open (not blinking/mood), briefly offset the pupil
+  // dot from center to suggest a quick look left/right/up.
+  int16_t pupilDX = 0, pupilDY = 0;
+  if (eyeShape == 0 && g_glancing) {
+    switch (g_glanceDir) {
+      case 0: pupilDX = -2; break;   // left
+      case 1: pupilDX =  2; break;   // right
+      default: pupilDY = -2; break;  // up
+    }
+  }
+
+  int16_t eyeDX = 9, eyeY = cy - 2;
+  for (int i = -1; i <= 1; i += 2) {
+    int16_t ex = cx + i * eyeDX;
+    if (eyeShape == 1) {
+      display.drawFastHLine(ex - 4, eyeY, 8, SSD1306_WHITE);          // closed: flat line
+    } else if (eyeShape == 2) {
+      display.drawCircleHelper(ex, eyeY + 4, 5, 0x3, SSD1306_WHITE);  // happy: upward curve
+    } else {
+      display.fillCircle(ex, eyeY, eyeR, SSD1306_WHITE);                       // open: round eye
+      display.fillCircle(ex + pupilDX, eyeY + pupilDY, 1, SSD1306_BLACK);      // pupil (glance offset)
+    }
+  }
+  display.drawCircleHelper(cx, cy + 4, smileR, 0xC, SSD1306_WHITE);   // smile: bottom arc of a circle
+}
+
+// Classic digital-clock readout (24h HH:MM in a bezeled box, colon blinking once a
+// second) in place of the face, in the localtime configured in setup() via configTime()
+// (IST - see GMT_OFFSET_SEC). Falls back to the face if NTP never synced (no time
+// source) so the idle rotation never shows a blank/stale clock.
+void drawClockIcon(int16_t cx, int16_t cy) {
+  struct tm timeinfo;
+  if (!ntpSynced || !getLocalTime(&timeinfo, 0)) {
+    drawFaceIcon(cx, cy);
+    return;
+  }
+  bool colonOn = (timeinfo.tm_sec % 2) == 0;
+  char buf[6];
+  snprintf(buf, sizeof(buf), "%02d%c%02d", timeinfo.tm_hour, colonOn ? ':' : ' ', timeinfo.tm_min);
+
+  display.setTextSize(2);
+  int16_t w = strlen(buf) * 12, h = 16;
+  int16_t x = cx - w / 2, y = cy - h / 2;
+  display.drawRoundRect(x - 5, y - 4, w + 10, h + 8, 3, SSD1306_WHITE);   // LCD-style bezel
+  display.setCursor(x, y);
+  display.print(buf);
 }
 
 void drawWaveformIcon(int16_t cx, int16_t cy) {
@@ -157,6 +251,15 @@ void drawSpeakerIcon(int16_t cx, int16_t cy) {
   if ((g_animFrame % 4) < 2) display.drawCircleHelper(bx + 14, cy, 9, 0x6, SSD1306_WHITE);
 }
 
+// Small standalone smiley - a top-corner accent shown only while STATE_SPEAKING, echoing
+// the idle face's smile so a reply landing reads as "happy to have helped" at a glance.
+void drawEmojiSmiley(int16_t cx, int16_t cy, int16_t r) {
+  display.drawCircle(cx, cy, r, SSD1306_WHITE);
+  display.fillCircle(cx - r / 2, cy - r / 3, 1, SSD1306_WHITE);
+  display.fillCircle(cx + r / 2, cy - r / 3, 1, SSD1306_WHITE);
+  display.drawCircleHelper(cx, cy, r - 3, 0xC, SSD1306_WHITE);
+}
+
 const char* errorLabel() {
   switch (g_errorKind) {
     case ERR_WIFI: return "WIFI LOST";
@@ -187,10 +290,17 @@ void drawFrame() {
   drawWifiIcon(128 - 14, 0);
 
   switch (g_state) {
-    case STATE_IDLE:       drawSleepIcon(ICON_CX, ICON_CY);     drawLabel("SLEEP");      break;
+    case STATE_IDLE:
+      if (g_showClock) { drawClockIcon(ICON_CX, ICON_CY); drawLabel("TIME"); }
+      else              { drawFaceIcon(ICON_CX, ICON_CY);  drawLabel("TOUCH TO ASK"); }
+      break;
     case STATE_RECORDING:  drawWaveformIcon(ICON_CX, ICON_CY);  drawLabel("LISTENING");  break;
     case STATE_PROCESSING: drawHourglassIcon(ICON_CX, ICON_CY); drawLabel("THINKING");   break;
-    case STATE_SPEAKING:   drawSpeakerIcon(ICON_CX, ICON_CY);   drawLabel("SPEAKING");   break;
+    case STATE_SPEAKING:
+      drawSpeakerIcon(ICON_CX, ICON_CY);
+      drawLabel("SPEAKING");
+      drawEmojiSmiley(10, 6, 6);   // top-left accent, mirroring the WiFi icon's top-right corner
+      break;
     case STATE_ERROR:      drawErrorIcon(ICON_CX, ICON_CY);     drawLabel(errorLabel()); break;
   }
 
@@ -204,6 +314,7 @@ void drawFrame() {
 
 void displayInit() {
   Wire.begin(OLED_SDA, OLED_SCL);
+  Wire.setClock(400000);   // Fast Mode - cuts each full-frame push from ~80-100ms to ~20-25ms
   if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_I2C_ADDR)) {
     Serial.println("WARNING: SSD1306 init failed (check wiring/I2C address) - continuing without display");
     return;
@@ -213,12 +324,53 @@ void displayInit() {
   drawFrame();
 }
 
+// Eyes easing open, one step per call - meant to be called once per iteration of the
+// WiFi-connect wait loop in setup() so the display animates instead of sitting blank,
+// without adding any extra delay of its own (it reuses that loop's existing wait).
+void drawBootFrame(uint8_t step) {
+  static const uint8_t openness[] = {1, 2, 4, 6, 8, 8};   // eyelid height in px: closed -> open
+  uint8_t h = openness[step % 6];
+  display.clearDisplay();
+  display.drawFastHLine(0, 11, 128, SSD1306_WHITE);
+  for (int i = -1; i <= 1; i += 2) {
+    int16_t ex = ICON_CX + i * 9;
+    display.fillRect(ex - 4, ICON_CY - h / 2, 8, h, SSD1306_WHITE);
+  }
+  drawLabel("WAKING UP");
+  display.display();
+}
+
+// Quick "eyes snapping open" flourish played the instant a touch begins, before switching
+// to the full STATE_RECORDING waveform screen - purely cosmetic, kept short (~150ms total)
+// so it doesn't add noticeable latency to the mic capture that starts right after.
+void playWakeAnimation() {
+  static const uint8_t openness[] = {2, 5, 8};
+  for (uint8_t i = 0; i < 3; i++) {
+    display.clearDisplay();
+    display.drawFastHLine(0, 11, 128, SSD1306_WHITE);
+    drawWifiIcon(128 - 14, 0);
+    for (int s = -1; s <= 1; s += 2) {
+      int16_t ex = ICON_CX + s * 9;
+      display.fillRect(ex - 4, ICON_CY - openness[i] / 2, 8, openness[i], SSD1306_WHITE);
+    }
+    drawLabel("LISTENING");
+    display.display();
+    delay(50);
+  }
+}
+
 // Call whenever the assistant's state changes. subtitle is optional (e.g. first few words
 // of a transcript) and is truncated to fit one line - pass "" (or omit) for none.
 void updateDisplay(AssistantState newState, const char* subtitle = "") {
   g_state = newState;
   g_animFrame = 0;
   g_lastAnimMs = millis();
+  if (newState == STATE_IDLE) {
+    g_showClock = false;                         // always (re)enter idle on the face, not mid-clock
+    g_idleRotateAtMs = millis() + IDLE_FACE_MS;
+    g_glancing = false;
+    g_nextGlanceMs = millis() + 3000 + random(3000);   // first glance 3-6s after going idle
+  }
   strncpy(g_subtitle, subtitle, sizeof(g_subtitle) - 1);
   g_subtitle[sizeof(g_subtitle) - 1] = '\0';
   drawFrame();
@@ -235,11 +387,39 @@ void setWifiConnected(bool connected) {
   drawFrame();
 }
 
-// Call once per loop() iteration. Cheap: only redraws every ANIM_INTERVAL_MS, and only
-// for states that actually animate (idle/error are static) - safe to run alongside I2S.
+// Call once per loop() iteration. Cheap: error is fully static (no-op). Idle redraws every
+// ANIM_INTERVAL_MS to drive the breathing pulse (and, less often, a mood animation, curious
+// glance, or face<->clock flip) - same cadence as the other states' icon animations, so this
+// stays safe to run alongside I2S.
 void tickDisplay() {
-  if (g_state == STATE_IDLE || g_state == STATE_ERROR) return;
   uint32_t now = millis();
+  if (g_state == STATE_ERROR) return;
+
+  if (g_state == STATE_IDLE) {
+    if (g_moodUntilMs != 0 && now >= g_moodUntilMs) {
+      g_moodUntilMs = 0;
+    } else if (g_moodUntilMs == 0 && !g_showClock) {
+      if (g_glancing && now >= g_glanceUntilMs) {
+        g_glancing = false;
+        g_nextGlanceMs = now + 5000 + random(3000);   // next glance in 5-8s
+      } else if (!g_glancing && now >= g_nextGlanceMs) {
+        g_glancing = true;
+        g_glanceDir = random(3);
+        g_glanceUntilMs = now + GLANCE_DURATION_MS;
+      }
+    }
+    if (g_moodUntilMs == 0 && ntpSynced && now >= g_idleRotateAtMs) {
+      g_showClock = !g_showClock;
+      g_idleRotateAtMs = now + (g_showClock ? IDLE_CLOCK_MS : IDLE_FACE_MS);
+    }
+    if (now - g_lastAnimMs >= ANIM_INTERVAL_MS) {
+      g_lastAnimMs = now;
+      g_animFrame++;
+      drawFrame();
+    }
+    return;
+  }
+
   if (now - g_lastAnimMs < ANIM_INTERVAL_MS) return;
   g_lastAnimMs = now;
   g_animFrame++;
@@ -278,24 +458,9 @@ bool touchTapped() {
   return tapped;
 }
 
-// Call once per loop() with that iteration's touchTapped() result. Returns true only on the
-// second tap of a double-tap (two taps each individually past TOUCH_DEBOUNCE_MS apart, but
-// both within DOUBLE_TAP_WINDOW_MS of each other). A single tap that's never followed by a
-// second one within the window is silently absorbed - callers only ever see complete pairs.
-bool isDoubleTap(bool tapped) {
-  static uint32_t firstTapMs = 0;
-  static bool     armed = false;
-  if (!tapped) return false;
-  uint32_t now = millis();
-  if (armed && (now - firstTapMs) <= DOUBLE_TAP_WINDOW_MS) {
-    armed = false;
-    return true;
-  }
-  armed = true;
-  firstTapMs = now;
-  return false;
-}
-
+// Records for as long as the touch pad is held, stopping as soon as it's released - not on
+// a second tap. Release is confirmed via a short debounce (pin must read LOW continuously
+// for TOUCH_DEBOUNCE_MS) so a momentary noise blip mid-hold can't cut a recording short.
 void recordUntilStop() {
   recBytes = 0;
   int32_t raw[256];
@@ -303,11 +468,11 @@ void recordUntilStop() {
   size_t cnt = 0;
   long long sum = 0;
   uint32_t startMs = millis();
-  bool stopRequested = false;
+  uint32_t lowSinceMs = 0;   // 0 while the pad reads HIGH; set the moment it first reads LOW
+  uint32_t lastSpeakerFeedMs = startMs;   // see feedSilentSlice() - keeps the amp's clock locked
+                                          // through however long this hold turns out to last
 
-  while (recBytes < RECORD_BUFFER_BYTES &&
-         (millis() - startMs) < RECORD_SECONDS * 1000UL &&
-         !stopRequested) {
+  while (recBytes < RECORD_BUFFER_BYTES && (millis() - startMs) < RECORD_SECONDS * 1000UL) {
     size_t bytesRead = I2S_mic.readBytes((char*)raw, sizeof(raw));
     if (bytesRead > 0) {
       size_t n = bytesRead / 4;
@@ -320,7 +485,16 @@ void recordUntilStop() {
         recBytes += 2;
       }
     }
-    if (touchTapped()) stopRequested = true;
+    if (millis() - lastSpeakerFeedMs >= SPEAKER_KEEPALIVE_MS) {
+      feedSilentSlice();
+      lastSpeakerFeedMs = millis();
+    }
+    if (digitalRead(TOUCH_PIN) == LOW) {
+      if (lowSinceMs == 0) lowSinceMs = millis();
+      else if (millis() - lowSinceMs > TOUCH_DEBOUNCE_MS) break;
+    } else {
+      lowSinceMs = 0;
+    }
   }
   if (cnt == 0) { Serial.println("no samples"); return; }
 
@@ -346,17 +520,23 @@ void sendAudioToBackend() {
 
   Serial.printf("[WS] sending %u bytes of audio...\n", (unsigned)recBytes);
   uint32_t t0 = millis();
+  uint32_t lastSpeakerFeedMs = t0;   // see feedSilentSlice() - keeps the amp's clock locked
+                                     // through however long this upload takes over WiFi
   const size_t CHUNK = 4096;
   for (size_t off = 0; off < recBytes; off += CHUNK) {
     size_t len = min(CHUNK, recBytes - off);
     webSocket.sendBIN(recBuffer + off, len);
     yield();  // let the WiFi/TCP stack breathe and avoid tripping the watchdog on long sends
+    if (millis() - lastSpeakerFeedMs >= SPEAKER_KEEPALIVE_MS) {
+      feedSilentSlice();
+      lastSpeakerFeedMs = millis();
+    }
   }
   webSocket.sendTXT("{\"type\":\"end\"}");
   waitingForReply = true;
   audioEndReceived = false;
   speakingShown = false;
-  updateDisplay(STATE_PROCESSING);
+  // display already flipped to STATE_PROCESSING by the caller the instant the touch was released
   Serial.printf("[WS] sent (%.1fs), waiting for reply...\n", (millis() - t0) / 1000.0f);
 }
 
@@ -379,15 +559,27 @@ void pushTtsBytes(const uint8_t* data, size_t len) {
   ttsFill += len;
 }
 
+// Keep BCLK/WS toggling continuously even with nothing queued. I2S DAC/amp combos like the
+// MAX98357 need a steady clock to stay locked; going fully silent (no write() calls) lets it
+// drift out of lock, so the first real samples of the next reply come out garbled while it
+// re-syncs. Feeding zeros is cheap insurance against that - called from drainTtsRing() every
+// idle loop() iteration, and periodically from recordUntilStop()/sendAudioToBackend() too,
+// since those block loop() (and therefore drainTtsRing()) for seconds at a time otherwise.
+void feedSilentSlice() {
+  const size_t sliceSamples = 512;
+  uint8_t stereoBuf[sliceSamples * 4];  // MAX98357 needs a full L+R frame per sample
+  memset(stereoBuf, 0, sizeof(stereoBuf));
+  I2S_speaker.write(stereoBuf, sizeof(stereoBuf));
+}
+
 // Paced consumer: called once per loop() iteration. Always writes exactly one ~21ms slice to
 // I2S_speaker - real TTS audio (16-bit, 24kHz, mono, headerless — matches services/tts.py's
-// contract) if any is queued, otherwise silence to keep the amp's clock locked (see below).
+// contract) if any is queued, otherwise silence to keep the amp's clock locked (see above).
 // I2S_speaker.write() blocks for ~21ms per slice either way, which naturally paces this
 // function's caller (loop()) at real-time without starving webSocket.loop() for long stretches.
 void drainTtsRing() {
   const size_t sliceSamples = 512;
   const size_t sliceBytes   = sliceSamples * 2;
-  uint8_t stereoBuf[sliceSamples * 4];  // MAX98357 needs a full L+R frame per sample
 
   if (ttsFill == 0) {
     if (audioEndReceived && waitingForReply) {
@@ -395,14 +587,10 @@ void drainTtsRing() {
       audioEndReceived = false;
       speakingShown = false;
       updateDisplay(STATE_IDLE);
+      playMood(900);   // quick happy/curious blink - a successful reply just finished
       Serial.println("[WS] reply complete\n==================================================\n");
     }
-    // Keep BCLK/WS toggling continuously even with nothing queued. I2S DAC/amp combos like
-    // the MAX98357 need a steady clock to stay locked; going fully silent (no write() calls)
-    // lets it drift out of lock, so the first real samples of the next reply come out
-    // garbled while it re-syncs. Feeding zeros is cheap insurance against that every reply.
-    memset(stereoBuf, 0, sizeof(stereoBuf));
-    I2S_speaker.write(stereoBuf, sizeof(stereoBuf));
+    feedSilentSlice();
     return;
   }
 
@@ -415,6 +603,7 @@ void drainTtsRing() {
   }
 
   uint8_t raw[sliceBytes];
+  uint8_t stereoBuf[sliceSamples * 4];  // MAX98357 needs a full L+R frame per sample
   size_t firstPart = TTS_RING_BYTES - ttsTail;
   if (firstPart > n) firstPart = n;
   memcpy(raw, ttsRing + ttsTail, firstPart);
@@ -452,7 +641,11 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
       speakingShown = false;
       ttsHead = ttsTail = ttsFill = 0;   // discard any partial audio from the interrupted turn
       setDisplayError(ERR_WIFI);
-      Serial.println("[WS] disconnected — will auto-reconnect");
+      // WiFi.status() here tells you whether this is a real WiFi drop or just the backend/
+      // tunnel going away while WiFi itself is still fine - both show the same "WIFI LOST"
+      // icon, but only one of them is actually WiFi.
+      Serial.printf("[WS] disconnected (WiFi status: %s) - will auto-reconnect, or tap to retry now\n",
+                    wifiStatusStr(WiFi.status()));
       break;
 
     case WStype_TEXT: {
@@ -509,6 +702,55 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
   }
 }
 
+const char* wifiStatusStr(wl_status_t s) {
+  switch (s) {
+    case WL_IDLE_STATUS:     return "IDLE_STATUS";
+    case WL_NO_SSID_AVAIL:   return "NO_SSID_AVAIL (SSID not found - wrong name, out of range, or a 5GHz-only network? ESP32 is 2.4GHz-only)";
+    case WL_SCAN_COMPLETED:  return "SCAN_COMPLETED";
+    case WL_CONNECT_FAILED:  return "CONNECT_FAILED (likely wrong password)";
+    case WL_CONNECTION_LOST: return "CONNECTION_LOST";
+    case WL_DISCONNECTED:    return "DISCONNECTED";
+    case WL_CONNECTED:       return "CONNECTED";
+    default:                 return "UNKNOWN";
+  }
+}
+
+// Blocking WiFi (re)connect attempt, up to timeoutMs. Logs every status change it passes
+// through (not just a dot per 300ms) so a real failure reason - bad password, SSID not
+// found/out of range, etc. - shows up in Serial instead of a bare timeout. Reused for both
+// the initial boot connect and touch-triggered retries (see setup() and loop()).
+bool connectWifi(uint32_t timeoutMs) {
+  Serial.printf("[WiFi] connecting to \"%s\"...\n", WIFI_SSID);
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect(true, true);   // clear any stale association before a fresh attempt
+  delay(100);
+  WiFi.setSleep(false);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  uint32_t t0 = millis();
+  uint8_t bootStep = 0;
+  wl_status_t lastStatus = (wl_status_t)255;   // sentinel so the first status always logs
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < timeoutMs) {
+    wl_status_t s = WiFi.status();
+    if (s != lastStatus) {
+      Serial.printf("[WiFi] status: %s\n", wifiStatusStr(s));
+      lastStatus = s;
+    }
+    drawBootFrame(bootStep++);   // eyes opening, in place of a blank screen - same 300ms wait either way
+    delay(300);
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.printf("[WiFi] FAILED after %lums - last status: %s\n",
+                  (unsigned long)(millis() - t0), wifiStatusStr(WiFi.status()));
+    return false;
+  }
+
+  Serial.printf("[WiFi] connected. IP=%s  RSSI=%d dBm\n",
+                WiFi.localIP().toString().c_str(), WiFi.RSSI());
+  return true;
+}
+
 void setup() {
   Serial.begin(115200);
   delay(500);
@@ -545,22 +787,22 @@ void setup() {
     while (true) delay(1000);
   }
 
-  Serial.printf("Connecting to WiFi \"%s\"", WIFI_SSID);
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  WiFi.setSleep(false);
-  uint32_t t0 = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 20000) { Serial.print("."); delay(300); }
-  Serial.println();
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("FATAL: WiFi failed");
+  while (!connectWifi(20000)) {
+    // Unlike before, a boot-time failure no longer hangs forever - show the error and wait
+    // for a tap to retry, so a bad AP/router hiccup at power-on doesn't require a re-flash.
     setDisplayError(ERR_WIFI);
-    while (true) delay(1000);
+    Serial.println("[WiFi] tap the touch pad to retry");
+    while (!touchTapped()) { tickDisplay(); delay(20); }
+    Serial.println("[WiFi] tap detected - retrying...");
   }
   setWifiConnected(true);
   updateDisplay(STATE_IDLE);
-  Serial.printf("WiFi OK  IP=%s  RSSI=%d dBm\n",
-                WiFi.localIP().toString().c_str(), WiFi.RSSI());
+
+  configTime(GMT_OFFSET_SEC, DST_OFFSET_SEC, NTP_SERVER);
+  struct tm timeinfo;
+  ntpSynced = getLocalTime(&timeinfo, 5000);   // one-time wait here in setup(), never in loop()
+  if (ntpSynced) Serial.printf("NTP synced: %02d:%02d\n", timeinfo.tm_hour, timeinfo.tm_min);
+  else           Serial.println("WARNING: NTP sync failed - idle clock screen will stay off");
 
   Serial.printf("Connecting to backend wss://%s:%d%s ...\n", VPS_HOST, VPS_PORT, VPS_WS_PATH);
   // beginSSL with no fingerprint/CA arg = certificate validation is skipped (insecure TLS).
@@ -596,20 +838,33 @@ void loop() {
 
   bool tapped = touchTapped();
 
-  if (waitingForReply) {
-    // A reply is playing/pending: only a double-tap stops it, and it stops audio only -
-    // it does NOT start a new recording. That keeps a single stray tap during playback
-    // from being misread as "stop and immediately start listening."
-    if (isDoubleTap(tapped)) {
-      Serial.println("[WS] double-tap - stopping playback");
-      ttsHead = ttsTail = ttsFill = 0;
-      ignoreIncomingAudio = true;   // discard the interrupted turn's remaining bytes (see flag comment above)
-      waitingForReply = false;
-      audioEndReceived = false;
-      speakingShown = false;
+  if (g_state == STATE_ERROR && g_errorKind == ERR_WIFI && tapped) {
+    Serial.println("[WiFi] retry requested via touch");
+    if (connectWifi(15000)) {
+      setWifiConnected(true);
       updateDisplay(STATE_IDLE);
+      // Reconnect the socket immediately rather than waiting on its own 5s retry timer -
+      // WiFi was just down, so any prior connection state is stale anyway.
+      webSocket.disconnect();
+      webSocket.beginSSL(VPS_HOST, VPS_PORT, VPS_WS_PATH);
+    } else {
+      setDisplayError(ERR_WIFI);
     }
-    return;   // drainTtsRing() above already paces this loop at ~21ms/iteration via its I2S write
+    return;
+  }
+
+  if (waitingForReply) {
+    // A touch here means "interrupt and ask again" - stop whatever's playing/pending and
+    // fall straight into a fresh listen below, using the same touch-to-talk gesture as idle.
+    if (!tapped) {
+      return;   // drainTtsRing() above already paces this loop at ~21ms/iteration via its I2S write
+    }
+    Serial.println("[touch] barge-in - stopping playback to listen again");
+    ttsHead = ttsTail = ttsFill = 0;
+    ignoreIncomingAudio = true;   // discard the interrupted turn's remaining bytes (see flag comment above)
+    waitingForReply = false;
+    audioEndReceived = false;
+    speakingShown = false;
   }
 
   if (!tapped) {
@@ -621,9 +876,11 @@ void loop() {
     return;
   }
 
-  Serial.println(">>> RECORDING... tap the touch pad again to stop <<<");
+  Serial.println(">>> touch down - waking up & listening (release to stop) <<<");
+  playWakeAnimation();
   updateDisplay(STATE_RECORDING);
   recordUntilStop();
-  Serial.println("==================================================");
+  Serial.println("<<< touch released - thinking >>>");
+  updateDisplay(STATE_PROCESSING);
   sendAudioToBackend();
 }

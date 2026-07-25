@@ -1,5 +1,10 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <WebServer.h>
+#include <DNSServer.h>
+#include <Preferences.h>
+// ^ WebServer/DNSServer/Preferences are all bundled with the esp32 Arduino core - no Library
+//   Manager install needed. Used for the WiFi-setup captive portal (see runWifiSetupPortal()).
 #include <ArduinoJson.h>
 #include <ESP_I2S.h>
 #include <WebSocketsClient.h>
@@ -14,10 +19,20 @@
 #include <math.h>   // sinf/lroundf for the idle face's breathing animation
 
 // ====== EDIT THESE ======================================================
-#define WIFI_SSID       "test"
-#define WIFI_PASSWORD   "test"
+// WiFi credentials are no longer hardcoded here - they're entered once via a captive-portal
+// setup page (see runWifiSetupPortal()) and persisted in flash (Preferences/NVS), so the same
+// binary can be pointed at any network without a re-flash. See WIFI_SETUP_* below.
+#define WIFI_SETUP_AP_SSID        "ESP32-Setup"   // shown during setup - join this from any phone
+#define WIFI_SETUP_AP_PASSWORD    "test@123"      // default setup-hotspot password (WPA2 needs >=8 chars)
+#define WIFI_RESET_HOLD_MS        5000            // hold the touch pad this long - at power-on, or anytime
+                                                   // while running - to wipe saved WiFi creds and re-enter setup mode
+#define DNS_PORT 53
 
-#define VPS_HOST        "test"     // cloudflared host, e.g. "abc-def-ghi.trycloudflare.com" — no "https://" prefix, no trailing slash
+// Fallback backend host, only used the very first time the device boots with nothing saved
+// yet - cloudflared quick-tunnel hostnames rotate, so the real value normally comes from NVS
+// (see loadVpsHost()) and is entered/updated through the same setup portal as WiFi, without a
+// re-flash. Edit this default too if you'd like a fresh flash to start pointed somewhere sane.
+#define VPS_HOST_DEFAULT "belief-remain-reporting-puzzle.trycloudflare.com"     // cloudflared host, e.g. "abc-def-ghi.trycloudflare.com" — no "https://" prefix, no trailing slash
 #define VPS_PORT        443                        // cloudflared serves over standard HTTPS/wss port, not the backend's local --port
 #define VPS_WS_PATH     "/api/ws/voice"            // wss:// via cloudflared — still no auth (see backend README)
 
@@ -39,13 +54,13 @@
 // TTP223: VCC->3.3V, GND->GND, OUT->GPIO1. Assumes default (momentary) mode -
 // solder jumper NOT bridged - so OUT reads HIGH only while a finger is touching
 // the pad and LOW once released. If your module is bridged for latching/toggle
-// output instead, remove the jumper so OUT behaves momentarily. Press-and-hold is
-// the whole interaction model: hold the pad to listen, release it to send.
+// output instead, remove the jumper so OUT behaves momentarily. Single-tap is
+// the whole interaction model: tap once to start listening, tap again to stop and send.
 #define TOUCH_DEBOUNCE_MS 60    // ignore state changes within this long of the last recognized one
 
 #define SAMPLE_RATE_HZ   16000
 #define MIC_SHIFT           13     // PROVEN loud value from your bench test
-#define RECORD_SECONDS      15     // safety cap; recording normally stops early on touch release
+#define RECORD_SECONDS      15     // safety cap; recording normally stops early on the second tap
 #define RECORD_BUFFER_BYTES (SAMPLE_RATE_HZ * 2 * RECORD_SECONDS)
 
 #define I2S_SPK_BCLK    15    // MAX98357 BCLK
@@ -83,18 +98,42 @@ uint32_t touchLastTapMs = 0;       // millis() of the last recognized tap, for d
 
 WebSocketsClient webSocket;
 
+// WiFi/backend setup portal (see runWifiSetupPortal()). g_wifiSsid/g_wifiPass/g_vpsHost hold
+// whatever config is currently in use - loaded from NVS at boot - so loop()'s runtime
+// WiFi-drop retry can reuse them without re-reading flash each time.
+WebServer setupServer(80);
+DNSServer dnsServer;
+String    g_wifiSsid, g_wifiPass;
+String    g_vpsHost;
+
 // Ring buffer for incoming TTS audio. WStype_BIN just memcpy's into this (microsecond-scale)
 // instead of blocking on I2S playback directly - playback is drained a small slice at a time
 // from loop(), so webSocket.loop() always gets called frequently enough to keep the TLS/TCP
 // connection serviced. Without this, a multi-second reply blocks webSocketEvent() for so long
 // that the far end (Cloudflare edge / backend) sees an unresponsive peer and drops the connection.
 #define TTS_RING_BYTES  1048576  // ~21.8s of buffered 24kHz/16-bit mono audio (PSRAM, not tight SRAM)
+// Before playing the very first slice of a new reply, wait until this much audio is buffered.
+// Absorbs bursty first-chunk delivery (TCP/TLS may fragment the backend's 8KB WS frame across
+// multiple onEvent(WStype_BIN) callbacks) so drainTtsRing() doesn't underrun on slice #1 and
+// leave the amp starved. ~85ms of audio at 24kHz/16-bit mono = half a backend chunk.
+#define TTS_PREBUFFER_BYTES 4096
+// Linear fade-in applied to the first N samples of each reply to avoid an amplitude pop from
+// silence -> full-volume PCM (compounded by g_volumePercent default of 150%). ~21ms at 24kHz.
+#define TTS_FADEIN_SAMPLES  512
 uint8_t* ttsRing = nullptr;
 size_t   ttsHead = 0;   // next write index (producer: pushTtsBytes)
 size_t   ttsTail = 0;   // next read index  (consumer: drainTtsRing)
 size_t   ttsFill = 0;   // bytes currently buffered
 bool     audioEndReceived = false;   // true once the "audio_end" text message has arrived
 bool     speakingShown    = false;   // set once STATE_SPEAKING has been shown for the current reply
+// Set inside drainTtsRing() the instant real playback starts, consumed in loop() right after
+// drainTtsRing() returns. Defers the ~20-25ms blocking SSD1306 I2C flush (updateDisplay ->
+// drawFrame -> display.display()) off the I2S critical path - if we flushed inline before the
+// first I2S write, the MAX98357 would lose BCLK/WS clock lock and glitch the first ~1-2s of
+// playback (the exact failure mode feedSilentSlice()'s keep-alive design exists to prevent).
+bool     pendingSpeakingDisplay = false;
+bool     ttsPrebufferPrimed = false;   // false until ttsFill first crosses TTS_PREBUFFER_BYTES this reply
+uint32_t fadeInSamplesRemaining = 0;   // counts down from TTS_FADEIN_SAMPLES on the first real slice
 
 // ====================== OLED status display (SSD1306 128x64 I2C) ======================
 // Icon-only state screen: blinking face rotating with a clock (idle), animated waveform
@@ -203,18 +242,22 @@ void drawClockIcon(int16_t cx, int16_t cy) {
   struct tm timeinfo;
   if (!ntpSynced || !getLocalTime(&timeinfo, 0)) {
     drawFaceIcon(cx, cy);
+    drawLabel("TIME");
     return;
   }
   bool colonOn = (timeinfo.tm_sec % 2) == 0;
   char buf[6];
   snprintf(buf, sizeof(buf), "%02d%c%02d", timeinfo.tm_hour, colonOn ? ':' : ' ', timeinfo.tm_min);
 
-  display.setTextSize(2);
-  int16_t w = strlen(buf) * 12, h = 16;
+  display.setTextSize(3);
+  int16_t w = strlen(buf) * 18, h = 24;
   int16_t x = cx - w / 2, y = cy - h / 2;
-  display.drawRoundRect(x - 5, y - 4, w + 10, h + 8, 3, SSD1306_WHITE);   // LCD-style bezel
   display.setCursor(x, y);
   display.print(buf);
+
+  char dateBuf[16];
+  strftime(dateBuf, sizeof(dateBuf), "%d %b %Y", &timeinfo);
+  drawLabel(dateBuf);   // reuses the same centered subtitle row every other state's label uses
 }
 
 void drawWaveformIcon(int16_t cx, int16_t cy) {
@@ -291,7 +334,7 @@ void drawFrame() {
 
   switch (g_state) {
     case STATE_IDLE:
-      if (g_showClock) { drawClockIcon(ICON_CX, ICON_CY); drawLabel("TIME"); }
+      if (g_showClock) { drawClockIcon(ICON_CX, ICON_CY); }   // draws its own date label (or "TIME" if not yet NTP-synced)
       else              { drawFaceIcon(ICON_CX, ICON_CY);  drawLabel("TOUCH TO ASK"); }
       break;
     case STATE_RECORDING:  drawWaveformIcon(ICON_CX, ICON_CY);  drawLabel("LISTENING");  break;
@@ -338,6 +381,42 @@ void drawBootFrame(uint8_t step) {
   }
   drawLabel("WAKING UP");
   display.display();
+}
+
+// Shown once the setup portal's AP+webserver are up (see runWifiSetupPortal()): the network
+// name to join plus its password (the IP is still logged to Serial, but the password is the
+// one thing that isn't otherwise guessable), reusing the existing drawLabel()/drawWifiIcon()
+// helpers and the same subtitle-row layout drawFrame() uses rather than inventing a new state.
+void drawSetupScreen() {
+  display.clearDisplay();
+  display.drawFastHLine(0, 11, 128, SSD1306_WHITE);
+  drawWifiIcon(128 - 14, 0);          // g_wifiConnected is false here - shows the "disconnected" slash
+  drawLabel("JOIN " WIFI_SETUP_AP_SSID);
+  display.setTextSize(1);
+  display.setCursor(0, SUBTITLE_Y);
+  display.print("Pass: " WIFI_SETUP_AP_PASSWORD);
+  display.display();
+}
+
+// One-off "cheers" celebration, shown for a couple seconds the first time setup() connects
+// after a fresh save from the portal (see consumeFreshProvisionFlag()), before falling through
+// to the normal idle screen. Reuses drawEmojiSmiley() at a bigger radius plus a few sparkle
+// rays for a "party" look, rather than inventing a whole new icon language.
+void playCheersAnimation() {
+  display.clearDisplay();
+  display.drawFastHLine(0, 11, 128, SSD1306_WHITE);
+  drawWifiIcon(128 - 14, 0);
+  drawEmojiSmiley(ICON_CX, ICON_CY, 13);
+  static const int8_t rayDX[] = {-1,  1, -1, 1, 0,  0};
+  static const int8_t rayDY[] = {-1, -1,  1, 1, -1, 1};
+  for (uint8_t i = 0; i < 6; i++) {
+    int16_t x0 = ICON_CX + rayDX[i] * 19, y0 = ICON_CY + rayDY[i] * 13;
+    display.drawFastHLine(x0 - 2, y0, 5, SSD1306_WHITE);
+    display.drawFastVLine(x0, y0 - 2, 5, SSD1306_WHITE);
+  }
+  drawLabel("CONNECTED!");
+  display.display();
+  delay(1800);
 }
 
 // Quick "eyes snapping open" flourish played the instant a touch begins, before switching
@@ -458,9 +537,38 @@ bool touchTapped() {
   return tapped;
 }
 
-// Records for as long as the touch pad is held, stopping as soon as it's released - not on
-// a second tap. Release is confirmed via a short debounce (pin must read LOW continuously
-// for TOUCH_DEBOUNCE_MS) so a momentary noise blip mid-hold can't cut a recording short.
+// Called once, early in setup(): holding the touch pad continuously through this window wipes
+// saved WiFi creds and forces the setup portal, even if a previously-saved network would still
+// connect fine (e.g. the device has been moved to a new location). A normal boot (pad untouched)
+// bails out on the very first check below, so this costs no perceptible delay on the common path.
+bool checkBootLongPressForSetup() {
+  uint32_t start = millis();
+  drawLabel("HOLD TO SETUP");
+  display.display();
+  while (millis() - start < WIFI_RESET_HOLD_MS) {
+    if (digitalRead(TOUCH_PIN) != HIGH) return false;   // released early (or never touched) - not a request
+    delay(20);
+  }
+  return true;   // held continuously through the whole window
+}
+
+// Same gesture as checkBootLongPressForSetup(), but polled from loop() the instant a tap starts
+// (rather than once at boot) so a long hold works anytime the device is running too - e.g. to
+// recover from a bad WiFi reset without needing a power-cycle. A normal quick tap releases well
+// before WIFI_RESET_HOLD_MS elapses, so this adds negligible delay to the common tap-to-record path.
+bool checkRuntimeLongHoldForWifiReset() {
+  uint32_t start = millis();
+  while (millis() - start < WIFI_RESET_HOLD_MS) {
+    if (digitalRead(TOUCH_PIN) != HIGH) return false;   // released early - just a normal tap
+    delay(20);
+  }
+  return true;   // held continuously through the whole window
+}
+
+// Records until a second tap is detected (edge-triggered via touchTapped(), same as the tap
+// that started this recording) or RECORD_SECONDS elapses as a safety cap. Reusing touchTapped()
+// here is safe per its own comment: it never runs concurrently with loop()'s call to it, since
+// this function blocks loop() entirely until it returns.
 void recordUntilStop() {
   recBytes = 0;
   int32_t raw[256];
@@ -468,9 +576,8 @@ void recordUntilStop() {
   size_t cnt = 0;
   long long sum = 0;
   uint32_t startMs = millis();
-  uint32_t lowSinceMs = 0;   // 0 while the pad reads HIGH; set the moment it first reads LOW
   uint32_t lastSpeakerFeedMs = startMs;   // see feedSilentSlice() - keeps the amp's clock locked
-                                          // through however long this hold turns out to last
+                                          // through however long this recording turns out to last
 
   while (recBytes < RECORD_BUFFER_BYTES && (millis() - startMs) < RECORD_SECONDS * 1000UL) {
     size_t bytesRead = I2S_mic.readBytes((char*)raw, sizeof(raw));
@@ -489,12 +596,7 @@ void recordUntilStop() {
       feedSilentSlice();
       lastSpeakerFeedMs = millis();
     }
-    if (digitalRead(TOUCH_PIN) == LOW) {
-      if (lowSinceMs == 0) lowSinceMs = millis();
-      else if (millis() - lowSinceMs > TOUCH_DEBOUNCE_MS) break;
-    } else {
-      lowSinceMs = 0;
-    }
+    if (touchTapped()) break;   // second tap = stop recording and send
   }
   if (cnt == 0) { Serial.println("no samples"); return; }
 
@@ -536,7 +638,9 @@ void sendAudioToBackend() {
   waitingForReply = true;
   audioEndReceived = false;
   speakingShown = false;
-  // display already flipped to STATE_PROCESSING by the caller the instant the touch was released
+  ttsPrebufferPrimed = false;
+  fadeInSamplesRemaining = 0;
+  // display already flipped to STATE_PROCESSING by the caller the instant the second tap landed
   Serial.printf("[WS] sent (%.1fs), waiting for reply...\n", (millis() - t0) / 1000.0f);
 }
 
@@ -586,6 +690,8 @@ void drainTtsRing() {
       waitingForReply = false;
       audioEndReceived = false;
       speakingShown = false;
+      ttsPrebufferPrimed = false;
+      fadeInSamplesRemaining = 0;
       updateDisplay(STATE_IDLE);
       playMood(900);   // quick happy/curious blink - a successful reply just finished
       Serial.println("[WS] reply complete\n==================================================\n");
@@ -594,12 +700,24 @@ void drainTtsRing() {
     return;
   }
 
+  // Prebuffer gate: on the first slice of a new reply, wait until we have enough queued that a
+  // slow/fragmented first WS frame can't underrun us mid-slice. Very short replies (that finish
+  // before hitting the threshold) still play - audioEndReceived releases the gate immediately.
+  if (!ttsPrebufferPrimed) {
+    if (ttsFill < TTS_PREBUFFER_BYTES && !audioEndReceived) {
+      feedSilentSlice();
+      return;
+    }
+    ttsPrebufferPrimed = true;
+    fadeInSamplesRemaining = TTS_FADEIN_SAMPLES;
+  }
+
   size_t n = min(sliceBytes, ttsFill) & ~size_t(1);   // keep 16-bit sample alignment
   if (n == 0) return;
 
   if (!speakingShown) {
     speakingShown = true;
-    updateDisplay(STATE_SPEAKING);
+    pendingSpeakingDisplay = true;   // loop() flushes the display AFTER our first I2S write returns
   }
 
   uint8_t raw[sliceBytes];
@@ -613,6 +731,12 @@ void drainTtsRing() {
   for (size_t s = 0; s < samples; s++) {
     int16_t sample = (int16_t)(raw[s * 2] | (raw[s * 2 + 1] << 8));
     int32_t scaled = ((int32_t)sample * g_volumePercent) / 100;
+    if (fadeInSamplesRemaining > 0) {
+      // Linear ramp: attenuation goes 0 -> full over the first TTS_FADEIN_SAMPLES samples.
+      uint32_t num = TTS_FADEIN_SAMPLES - fadeInSamplesRemaining;
+      scaled = (scaled * (int32_t)num) / TTS_FADEIN_SAMPLES;
+      fadeInSamplesRemaining--;
+    }
     if (scaled > 32767) scaled = 32767; else if (scaled < -32768) scaled = -32768;
     uint8_t b0 = (uint8_t)(scaled & 0xFF), b1 = (uint8_t)((scaled >> 8) & 0xFF);
     size_t o = s * 4;
@@ -639,6 +763,9 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
       audioEndReceived = false;
       ignoreIncomingAudio = false;
       speakingShown = false;
+      ttsPrebufferPrimed = false;
+      fadeInSamplesRemaining = 0;
+      pendingSpeakingDisplay = false;
       ttsHead = ttsTail = ttsFill = 0;   // discard any partial audio from the interrupted turn
       setDisplayError(ERR_WIFI);
       // WiFi.status() here tells you whether this is a real WiFi drop or just the backend/
@@ -681,6 +808,9 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
           waitingForReply = false;
           audioEndReceived = false;
           speakingShown = false;
+          ttsPrebufferPrimed = false;
+          fadeInSamplesRemaining = 0;
+          pendingSpeakingDisplay = false;
           ttsHead = ttsTail = ttsFill = 0;   // discard any partial audio for the failed turn
           setDisplayError(ERR_API);
           Serial.printf("[WS] error: %s\n", (const char*)(doc["detail"] | ""));
@@ -702,6 +832,163 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
   }
 }
 
+// ---- WiFi credential + backend host storage (NVS via Preferences) + captive-portal setup ----
+// Lets the same binary join any network and point at any backend without a re-flash: both are
+// entered once through a phone-facing setup page and persisted here, instead of being #defined
+// at compile time. See runWifiSetupPortal() below and its call sites in setup()/loop().
+
+bool loadSavedWifiCreds(String &ssid, String &pass) {
+  Preferences prefs;
+  prefs.begin("wifi", true);   // read-only; fine even if the namespace doesn't exist yet
+  ssid = prefs.getString("ssid", "");
+  pass = prefs.getString("pass", "");
+  prefs.end();
+  return ssid.length() > 0;
+}
+
+void saveWifiCreds(const String &ssid, const String &pass) {
+  Preferences prefs;
+  prefs.begin("wifi", false);
+  prefs.putString("ssid", ssid);
+  prefs.putString("pass", pass);
+  prefs.end();
+}
+
+// Clears only the saved WiFi creds (vpshost is left untouched) so the next boot has nothing to
+// connect with and falls straight into the setup portal - used by the "resetwifi" serial command.
+void clearWifiCreds() {
+  Preferences prefs;
+  prefs.begin("wifi", false);
+  prefs.remove("ssid");
+  prefs.remove("pass");
+  prefs.end();
+}
+
+// Falls back to VPS_HOST_DEFAULT until a host has ever been saved via the setup portal.
+String loadVpsHost() {
+  Preferences prefs;
+  prefs.begin("wifi", true);
+  String host = prefs.getString("vpshost", VPS_HOST_DEFAULT);
+  prefs.end();
+  return host;
+}
+
+void saveVpsHost(const String &host) {
+  Preferences prefs;
+  prefs.begin("wifi", false);
+  prefs.putString("vpshost", host);
+  prefs.end();
+}
+
+// Marks "just provisioned" (WiFi and/or backend host) so setup() shows a one-off "cheers"
+// celebration the next time it connects successfully, instead of the plain idle screen.
+void markFreshProvision() {
+  Preferences prefs;
+  prefs.begin("wifi", false);
+  prefs.putBool("fresh", true);
+  prefs.end();
+}
+
+// True exactly once, the first time setup() connects successfully after a fresh save from the
+// portal (across the ESP.restart() that follows a save) - see markFreshProvision() above.
+bool consumeFreshProvisionFlag() {
+  Preferences prefs;
+  prefs.begin("wifi", false);
+  bool fresh = prefs.getBool("fresh", false);
+  if (fresh) prefs.putBool("fresh", false);
+  prefs.end();
+  return fresh;
+}
+
+// Built fresh per request (rather than a static PROGMEM template) so it can show the
+// currently-saved backend host as a reference point - this endpoint is only ever hit a
+// handful of times during setup, so the extra String work is a non-issue.
+void handleSetupRoot() {
+  String html =
+    "<!DOCTYPE html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+    "<title>ESP32 Setup</title></head>"
+    "<body style=\"font-family:sans-serif;text-align:center;padding:24px\">"
+    "<h2>Connect ESP32 to WiFi</h2>"
+    "<form action=\"/save\" method=\"POST\">"
+    "<input name=\"ssid\" placeholder=\"WiFi Name (SSID)\" style=\"width:80%;padding:8px;margin:6px\"><br>"
+    "<input name=\"pass\" type=\"password\" placeholder=\"WiFi Password\" style=\"width:80%;padding:8px;margin:6px\"><br>"
+    "<hr style=\"margin:20px 0\">"
+    "<p style=\"color:#666;font-size:0.9em;margin-bottom:4px\">Backend server - only if it changed"
+    " (current: " + g_vpsHost + ")</p>"
+    "<input name=\"vpshost\" placeholder=\"e.g. abc-def.trycloudflare.com\" style=\"width:80%;padding:8px;margin:6px\"><br>"
+    "<input type=\"submit\" value=\"Save & Connect\" style=\"padding:10px 24px;margin-top:10px\">"
+    "</form></body></html>";
+  setupServer.send(200, "text/html", html);
+}
+
+void handleSetupSave() {
+  String ssid    = setupServer.hasArg("ssid")    ? setupServer.arg("ssid")    : "";
+  String pass    = setupServer.hasArg("pass")    ? setupServer.arg("pass")    : "";
+  String vpshost = setupServer.hasArg("vpshost") ? setupServer.arg("vpshost") : "";
+  vpshost.trim();
+
+  // Both fields are optional so this same form/reboot cycle also covers "just update the
+  // backend host, WiFi is fine" (reached via the boot long-press) - but at least one of the
+  // two has to actually be provided, or there's nothing to do.
+  if (ssid.length() == 0 && vpshost.length() == 0) {
+    setupServer.send(400, "text/plain", "Enter a WiFi SSID and/or a backend host to save");
+    return;
+  }
+
+  String summary;
+  if (ssid.length() > 0) {
+    saveWifiCreds(ssid, pass);   // pass may be empty, e.g. for an open target network
+    summary += "WiFi: \"" + ssid + "\". ";
+  }
+  if (vpshost.length() > 0) {
+    saveVpsHost(vpshost);
+    summary += "Backend host: \"" + vpshost + "\".";
+  }
+  markFreshProvision();
+
+  setupServer.send(200, "text/html",
+    "<html><body style='font-family:sans-serif;text-align:center;padding:24px'>"
+    "<h3>Saved!</h3><p>" + summary + "</p><p>Rebooting...</p>"
+    "<p>You can reconnect this phone to your normal WiFi now.</p></body></html>");
+  delay(1500);      // let the HTTP response actually flush to the phone before the AP disappears
+  ESP.restart();
+}
+
+// Any URL the OS's captive-portal probe hits (Android's /generate_204, iOS's
+// /hotspot-detect.html, Windows's /connecttest.txt, etc.) that isn't "/" or "/save" lands here.
+// Redirecting instead of returning each probe's expected clean response is exactly what makes
+// the OS conclude "this network has a sign-in page" and pop the captive-portal sheet.
+void handleSetupNotFound() {
+  setupServer.sendHeader("Location", String("http://") + WiFi.softAPIP().toString() + "/", true);
+  setupServer.send(302, "text/plain", "");
+}
+
+// Blocking captive-portal setup mode. Never returns under normal operation -
+// handleSetupSave() saves the new credentials and calls ESP.restart(), so the only way "out"
+// is a reboot into the normal setup()/loop() flow with the new creds now present in NVS.
+void runWifiSetupPortal() {
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(WIFI_SETUP_AP_SSID, WIFI_SETUP_AP_PASSWORD);
+  IPAddress apIP = WiFi.softAPIP();   // defaults to 192.168.4.1
+
+  dnsServer.start(DNS_PORT, "*", apIP);   // redirect every DNS lookup to us -> captive-portal popup
+
+  setupServer.on("/", HTTP_GET, handleSetupRoot);
+  setupServer.on("/save", HTTP_POST, handleSetupSave);
+  setupServer.onNotFound(handleSetupNotFound);
+  setupServer.begin();
+
+  drawSetupScreen();
+  Serial.printf("[WiFi] setup portal up - join \"%s\" (password: %s) and open http://%s/\n",
+                WIFI_SETUP_AP_SSID, WIFI_SETUP_AP_PASSWORD, apIP.toString().c_str());
+
+  while (true) {   // dedicated blocking loop - nothing else needs to run concurrently
+    dnsServer.processNextRequest();
+    setupServer.handleClient();
+    delay(2);
+  }
+}
+
 const char* wifiStatusStr(wl_status_t s) {
   switch (s) {
     case WL_IDLE_STATUS:     return "IDLE_STATUS";
@@ -719,13 +1006,13 @@ const char* wifiStatusStr(wl_status_t s) {
 // through (not just a dot per 300ms) so a real failure reason - bad password, SSID not
 // found/out of range, etc. - shows up in Serial instead of a bare timeout. Reused for both
 // the initial boot connect and touch-triggered retries (see setup() and loop()).
-bool connectWifi(uint32_t timeoutMs) {
-  Serial.printf("[WiFi] connecting to \"%s\"...\n", WIFI_SSID);
+bool connectWifi(const char* ssid, const char* pass, uint32_t timeoutMs) {
+  Serial.printf("[WiFi] connecting to \"%s\"...\n", ssid);
   WiFi.mode(WIFI_STA);
   WiFi.disconnect(true, true);   // clear any stale association before a fresh attempt
   delay(100);
   WiFi.setSleep(false);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.begin(ssid, pass);
 
   uint32_t t0 = millis();
   uint8_t bootStep = 0;
@@ -766,6 +1053,13 @@ void setup() {
   if (!ttsRing) { Serial.println("FATAL: ps_malloc (tts ring) failed"); while (true) delay(1000); }
 
   displayInit();   // early, so mic/WiFi init failures below can still show an error icon
+  g_vpsHost = loadVpsHost();   // before any possible runWifiSetupPortal() call below, which shows it
+
+  if (checkBootLongPressForSetup()) {
+    Serial.println("[WiFi] long-press detected at boot - clearing saved WiFi creds and entering setup portal");
+    clearWifiCreds();
+    runWifiSetupPortal();   // never returns - saving credentials triggers ESP.restart()
+  }
 
   I2S_mic.setPins(I2S_MIC_BCLK, I2S_MIC_LRCL, -1, I2S_MIC_DOUT);
   if (!I2S_mic.begin(I2S_MODE_STD, SAMPLE_RATE_HZ,
@@ -787,15 +1081,23 @@ void setup() {
     while (true) delay(1000);
   }
 
-  while (!connectWifi(20000)) {
-    // Unlike before, a boot-time failure no longer hangs forever - show the error and wait
-    // for a tap to retry, so a bad AP/router hiccup at power-on doesn't require a re-flash.
-    setDisplayError(ERR_WIFI);
-    Serial.println("[WiFi] tap the touch pad to retry");
-    while (!touchTapped()) { tickDisplay(); delay(20); }
-    Serial.println("[WiFi] tap detected - retrying...");
+  bool haveCreds = loadSavedWifiCreds(g_wifiSsid, g_wifiPass);
+  bool connected = haveCreds && connectWifi(g_wifiSsid.c_str(), g_wifiPass.c_str(), 20000);
+  if (!connected) {
+    // No saved network (first-ever boot) or it failed to connect (moved/router changed) -
+    // either way, drop straight into the setup portal instead of hanging or looping on
+    // credentials that clearly aren't working. This never returns; a successful save reboots
+    // into this same setup() with the new creds now in NVS.
+    Serial.println(haveCreds
+      ? "[WiFi] saved credentials failed to connect - entering setup portal"
+      : "[WiFi] no saved WiFi credentials - entering setup portal");
+    runWifiSetupPortal();
   }
   setWifiConnected(true);
+  if (consumeFreshProvisionFlag()) {
+    Serial.println("[WiFi] first connect after setup - celebrating on screen");
+    playCheersAnimation();   // then falls straight through to the normal idle screen below
+  }
   updateDisplay(STATE_IDLE);
 
   configTime(GMT_OFFSET_SEC, DST_OFFSET_SEC, NTP_SERVER);
@@ -804,10 +1106,10 @@ void setup() {
   if (ntpSynced) Serial.printf("NTP synced: %02d:%02d\n", timeinfo.tm_hour, timeinfo.tm_min);
   else           Serial.println("WARNING: NTP sync failed - idle clock screen will stay off");
 
-  Serial.printf("Connecting to backend wss://%s:%d%s ...\n", VPS_HOST, VPS_PORT, VPS_WS_PATH);
+  Serial.printf("Connecting to backend wss://%s:%d%s ...\n", g_vpsHost.c_str(), VPS_PORT, VPS_WS_PATH);
   // beginSSL with no fingerprint/CA arg = certificate validation is skipped (insecure TLS).
   // Fine for testing behind cloudflared; the tunnel's cert is real, we just aren't pinning it.
-  webSocket.beginSSL(VPS_HOST, VPS_PORT, VPS_WS_PATH);
+  webSocket.beginSSL(g_vpsHost.c_str(), VPS_PORT, VPS_WS_PATH);
   webSocket.onEvent(webSocketEvent);
   webSocket.setReconnectInterval(5000);
 }
@@ -815,6 +1117,13 @@ void setup() {
 void loop() {
   webSocket.loop();   // must run every cycle to process the socket and keep it alive
   drainTtsRing();     // play back one small (~21ms) slice of buffered TTS audio, if any is queued
+  if (pendingSpeakingDisplay) {
+    // Deferred so the ~20-25ms SSD1306 I2C flush inside updateDisplay() doesn't starve I2S at
+    // the exact moment we transition silence -> real audio; drainTtsRing() has already written
+    // one slice, so the amp stays clock-locked across this flush.
+    pendingSpeakingDisplay = false;
+    updateDisplay(STATE_SPEAKING);
+  }
   tickDisplay();      // advance any in-progress icon animation (no-op most iterations)
 
   static uint32_t lastWifiCheckMs = 0;
@@ -833,20 +1142,34 @@ void loop() {
       if (v > 150) v = 150;
       g_volumePercent = v;
       Serial.printf("Volume set to %d%%\n", g_volumePercent);
+    } else if (line.equalsIgnoreCase("resetwifi")) {
+      Serial.println("[WiFi] resetwifi requested - clearing saved credentials and rebooting into setup portal");
+      clearWifiCreds();
+      delay(200);
+      ESP.restart();
     }
   }
 
   bool tapped = touchTapped();
 
+  // Long hold (any state, anytime) wins over every other touch gesture below - reset WiFi and
+  // drop into the setup hotspot. Checked immediately off the rising edge so a normal quick tap
+  // (which releases well within WIFI_RESET_HOLD_MS) falls through to the rest of loop() untouched.
+  if (tapped && checkRuntimeLongHoldForWifiReset()) {
+    Serial.println("[WiFi] long-hold detected - clearing saved WiFi creds and entering setup portal");
+    clearWifiCreds();
+    runWifiSetupPortal();   // never returns - saving credentials triggers ESP.restart()
+  }
+
   if (g_state == STATE_ERROR && g_errorKind == ERR_WIFI && tapped) {
     Serial.println("[WiFi] retry requested via touch");
-    if (connectWifi(15000)) {
+    if (connectWifi(g_wifiSsid.c_str(), g_wifiPass.c_str(), 15000)) {
       setWifiConnected(true);
       updateDisplay(STATE_IDLE);
       // Reconnect the socket immediately rather than waiting on its own 5s retry timer -
       // WiFi was just down, so any prior connection state is stale anyway.
       webSocket.disconnect();
-      webSocket.beginSSL(VPS_HOST, VPS_PORT, VPS_WS_PATH);
+      webSocket.beginSSL(g_vpsHost.c_str(), VPS_PORT, VPS_WS_PATH);
     } else {
       setDisplayError(ERR_WIFI);
     }
@@ -865,6 +1188,9 @@ void loop() {
     waitingForReply = false;
     audioEndReceived = false;
     speakingShown = false;
+    ttsPrebufferPrimed = false;
+    fadeInSamplesRemaining = 0;
+    pendingSpeakingDisplay = false;
   }
 
   if (!tapped) {
@@ -876,11 +1202,11 @@ void loop() {
     return;
   }
 
-  Serial.println(">>> touch down - waking up & listening (release to stop) <<<");
+  Serial.println(">>> tap - waking up & listening (tap again to stop) <<<");
   playWakeAnimation();
   updateDisplay(STATE_RECORDING);
   recordUntilStop();
-  Serial.println("<<< touch released - thinking >>>");
+  Serial.println("<<< second tap - thinking >>>");
   updateDisplay(STATE_PROCESSING);
   sendAudioToBackend();
 }

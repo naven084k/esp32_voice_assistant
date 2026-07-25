@@ -3,8 +3,11 @@
 #include <WebServer.h>
 #include <DNSServer.h>
 #include <Preferences.h>
-// ^ WebServer/DNSServer/Preferences are all bundled with the esp32 Arduino core - no Library
-//   Manager install needed. Used for the WiFi-setup captive portal (see runWifiSetupPortal()).
+#include <FS.h>
+#include <SD_MMC.h>
+// ^ WebServer/DNSServer/Preferences/FS/SD_MMC are all bundled with the esp32 Arduino core - no
+//   Library Manager install needed. WebServer/DNSServer/Preferences back the WiFi-setup captive
+//   portal (see runWifiSetupPortal()); FS/SD_MMC back the SD-card file browser (see initSdFileServer()).
 #include <ArduinoJson.h>
 #include <ESP_I2S.h>
 #include <WebSocketsClient.h>
@@ -39,6 +42,13 @@
 #define OLED_SDA        8     // status display (SSD1306 128x64 I2C)
 #define OLED_SCL        9
 #define OLED_I2C_ADDR   0x3C  // try 0x3D if display.begin() fails
+
+// SD-card file browser (see initSdFileServer() setup + handleSdRoot()/handleSdDownload()).
+// ESP32-S3 has no fixed SD_MMC pin mapping - these must match your board's actual SD slot wiring.
+#define SD_MMC_CLK      39
+#define SD_MMC_CMD      38
+#define SD_MMC_D0       40    // 1-bit mode - only D0 wired; pass false to SD_MMC.begin() for 4-bit if D1-D3 are too
+#define SD_SERVER_PORT  8080  // separate port from the WiFi-setup portal's WebServer (port 80, AP-mode only)
 
 #define NTP_SERVER      "pool.ntp.org"
 #define GMT_OFFSET_SEC  19800 // IST (Hyderabad) = UTC+5:30 = 5*3600 + 30*60
@@ -105,6 +115,11 @@ WebServer setupServer(80);
 DNSServer dnsServer;
 String    g_wifiSsid, g_wifiPass;
 String    g_vpsHost;
+
+// SD-card file browser (see runSdFileServer() below) - separate WebServer instance/port from
+// setupServer since this one runs during normal STA-mode operation, not just the AP-mode portal.
+WebServer fileServer(SD_SERVER_PORT);
+bool      sdReady = false;
 
 // Ring buffer for incoming TTS audio. WStype_BIN just memcpy's into this (microsecond-scale)
 // instead of blocking on I2S playback directly - playback is drained a small slice at a time
@@ -331,6 +346,14 @@ void drawFrame() {
   display.clearDisplay();
   display.drawFastHLine(0, 11, 128, SSD1306_WHITE);
   drawWifiIcon(128 - 14, 0);
+  if (g_wifiConnected) {
+    // Top-left of the top bar (~114px of clear space to the left of the WiFi icon at x=114) -
+    // fits any IPv4 at textSize 1. Useful when Serial isn't attached and the user needs the
+    // SD file-browser URL at http://<this>:8080/.
+    display.setTextSize(1);
+    display.setCursor(0, 2);
+    display.print(WiFi.localIP());
+  }
 
   switch (g_state) {
     case STATE_IDLE:
@@ -473,6 +496,10 @@ void setWifiConnected(bool connected) {
 void tickDisplay() {
   uint32_t now = millis();
   if (g_state == STATE_ERROR) return;
+  // Skip animation-driven display.display() calls during the audio pipeline's active phases -
+  // a ~20-25ms SSD1306 I2C flush every 300ms would starve I2S and glitch the amp throughout
+  // the reply. The static icons painted by the state-transition updateDisplay() are enough.
+  if (g_state == STATE_PROCESSING || g_state == STATE_SPEAKING) return;
 
   if (g_state == STATE_IDLE) {
     if (g_moodUntilMs != 0 && now >= g_moodUntilMs) {
@@ -1038,6 +1065,122 @@ bool connectWifi(const char* ssid, const char* pass, uint32_t timeoutMs) {
   return true;
 }
 
+// ---- SD-card file browser (read-only: list + download) -----------------------------------
+// Runs on fileServer (port SD_SERVER_PORT) once WiFi is up, alongside the voice pipeline.
+// Reuses the same list+download design already proven in sd_card_info.ino, just wired to the
+// shared g_wifiSsid/WebServer pattern instead of that sketch's own hardcoded WiFi/setup() loop.
+const char* sdCardTypeName(uint8_t type) {
+  switch (type) {
+    case CARD_NONE:  return "No card detected";
+    case CARD_MMC:   return "MMC";
+    case CARD_SD:    return "SDSC";
+    case CARD_SDHC:  return "SDHC/SDXC";
+    default:         return "Unknown";
+  }
+}
+
+// Lists only the immediate children of dirname (no recursion) - subfolders render as links
+// back to handleSdRoot with ?path=, so the user drills in one level at a time on click.
+void listSdDir(const String& dirname, String& html) {
+  File root = SD_MMC.open(dirname);
+  if (!root || !root.isDirectory()) return;
+
+  File entry = root.openNextFile();
+  while (entry) {
+    String name = entry.name();
+    String leaf = name.startsWith("/") ? name.substring(name.lastIndexOf('/') + 1) : name;
+    String fullPath = name.startsWith("/") ? name : dirname + (dirname.endsWith("/") ? "" : "/") + name;
+    if (entry.isDirectory()) {
+      html += "<li><a href=\"/?path=" + fullPath + "\">" + leaf + "/</a></li>";
+    } else {
+      html += "<li><a href=\"/download?path=" + fullPath + "\">" + leaf + "</a> (" + String(entry.size()) + " bytes)</li>";
+    }
+    entry = root.openNextFile();
+  }
+}
+
+void handleSdRoot() {
+  if (!sdReady) {
+    fileServer.send(503, "text/plain", "SD card not mounted");
+    return;
+  }
+  String path = fileServer.hasArg("path") ? fileServer.arg("path") : "/";
+  String html = "<html><body><h3>SD Card: " + path + "</h3>";
+  if (path != "/") {
+    int lastSlash = path.lastIndexOf('/');
+    String parent = (lastSlash <= 0) ? "/" : path.substring(0, lastSlash);
+    html += "<p><a href=\"/?path=" + parent + "\">.. (up)</a></p>";
+  }
+  html += "<ul>";
+  listSdDir(path, html);
+  html += "</ul></body></html>";
+  fileServer.send(200, "text/html", html);
+}
+
+// Blocks loop() (and therefore webSocket.loop()/drainTtsRing()) for as long as the transfer
+// takes, same tradeoff this codebase already accepts for recordUntilStop()/sendAudioToBackend()/
+// runWifiSetupPortal() - fine for occasional file grabs, but a large file will pause the voice
+// assistant (WS keepalive, TTS playback) until the download finishes.
+void handleSdDownload() {
+  if (!fileServer.hasArg("path")) {
+    fileServer.send(400, "text/plain", "Missing path parameter");
+    return;
+  }
+  String path = fileServer.arg("path");
+  File file = SD_MMC.open(path, FILE_READ);
+  if (!file || file.isDirectory()) {
+    fileServer.send(404, "text/plain", "File not found: " + path);
+    return;
+  }
+  String filename = path.substring(path.lastIndexOf('/') + 1);
+  fileServer.sendHeader("Content-Disposition", "attachment; filename=\"" + filename + "\"");
+  fileServer.streamFile(file, "application/octet-stream");
+  file.close();
+}
+
+// Shown for a few seconds right after the file browser comes up, since Serial (where this URL
+// is also logged) isn't always plugged in/open - reuses the same top-bar+label+subtitle layout
+// drawFrame()'s other one-off screens (e.g. playCheersAnimation()) use, rather than a new one.
+void showSdServerScreen(const String& ip) {
+  display.clearDisplay();
+  display.drawFastHLine(0, 11, 128, SSD1306_WHITE);
+  drawWifiIcon(128 - 14, 0);
+  drawLabel(sdReady ? "SD SERVER" : "NO SD CARD");
+  display.setTextSize(1);
+  display.setCursor(0, SUBTITLE_Y);
+  display.print(ip + ":" + String(SD_SERVER_PORT));
+  display.display();
+  delay(3000);
+}
+
+// Called once from setup() after WiFi is up. Mounting failure (no card / bad wiring) is
+// non-fatal - sdReady stays false and handleSdRoot() reports it over HTTP instead of blocking
+// the rest of the voice assistant from starting.
+void initSdFileServer() {
+  SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0);
+  if (!SD_MMC.begin("/sdcard", true)) {   // true = 1-bit mode, see SD_MMC_D0 comment above
+    Serial.println("[SD] FAILED to mount SD_MMC card - check wiring/pins and formatting (FAT32/exFAT)");
+  } else if (SD_MMC.cardType() == CARD_NONE) {
+    Serial.println("[SD] no card attached");
+  } else {
+    sdReady = true;
+    Serial.printf("[SD] mounted (%s), %.2f MB free\n", sdCardTypeName(SD_MMC.cardType()),
+                  (SD_MMC.totalBytes() - SD_MMC.usedBytes()) / (1024.0 * 1024.0));
+    // Ensure the /esp32 working folder exists - mkdir() is a no-op (returns false) if the dir
+    // is already there, so this is safe to run on every boot.
+    if (SD_MMC.mkdir("/esp32")) Serial.println("[SD] created /esp32 folder");
+    else                         Serial.println("[SD] /esp32 folder already present");
+  }
+
+  fileServer.on("/", HTTP_GET, handleSdRoot);
+  fileServer.on("/download", HTTP_GET, handleSdDownload);
+  fileServer.begin();
+  String ip = WiFi.localIP().toString();
+  Serial.printf("[SD] file browser up at http://%s:%d/ (sdReady=%s)\n",
+                ip.c_str(), SD_SERVER_PORT, sdReady ? "true" : "false");
+  showSdServerScreen(ip);
+}
+
 void setup() {
   Serial.begin(115200);
   delay(500);
@@ -1100,6 +1243,8 @@ void setup() {
   }
   updateDisplay(STATE_IDLE);
 
+  initSdFileServer();   // mounts SD_MMC (non-fatal if absent) and starts the file-browser WebServer
+
   configTime(GMT_OFFSET_SEC, DST_OFFSET_SEC, NTP_SERVER);
   struct tm timeinfo;
   ntpSynced = getLocalTime(&timeinfo, 5000);   // one-time wait here in setup(), never in loop()
@@ -1116,6 +1261,7 @@ void setup() {
 
 void loop() {
   webSocket.loop();   // must run every cycle to process the socket and keep it alive
+  fileServer.handleClient();   // SD file browser - returns immediately if no client is connected
   drainTtsRing();     // play back one small (~21ms) slice of buffered TTS audio, if any is queued
   if (pendingSpeakingDisplay) {
     // Deferred so the ~20-25ms SSD1306 I2C flush inside updateDisplay() doesn't starve I2S at

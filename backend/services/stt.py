@@ -67,7 +67,10 @@ async def _google_transcribe(audio_bytes: bytes) -> str:
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post(_STT_URL, params={"key": _api_key()}, json=payload)
-        resp.raise_for_status()
+        if resp.is_error:
+            # resp.raise_for_status()'s message alone omits the response body, which is where
+            # Google actually explains *why* (bad audio encoding, invalid key, quota) — surface it.
+            raise RuntimeError(f"Google STT API error {resp.status_code}: {resp.text[:500]}")
         data = resp.json()
 
     results = data.get("results", [])

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import uuid
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
@@ -8,6 +9,7 @@ from services import stt, llm, tts
 from services.request_timer import new_timer, get_timer
 
 router = APIRouter()
+logger = logging.getLogger("voice_agent.voice")
 
 SUPPORTED_TYPES = {"audio/wav", "audio/mpeg", "audio/mp4", "audio/webm", "audio/ogg", "application/octet-stream"}
 
@@ -41,6 +43,7 @@ async def voice_chat(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"[voice/chat] turn failed (thread={tid}): {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         t = get_timer()
@@ -110,6 +113,7 @@ async def voice_ws(websocket: WebSocket):
         except WebSocketDisconnect:
             raise  # bubble up to outer handler — client left cleanly
         except Exception as e:
+            logger.error(f"[ws/voice] turn failed (thread={cfg['thread_id']}, audio_bytes={len(audio_bytes)}): {e}", exc_info=True)
             llm.pop_device_action(cfg["thread_id"])  # discard - never delivered for this turn
             try:
                 await websocket.send_json({"type": "error", "detail": str(e)})

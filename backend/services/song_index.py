@@ -12,7 +12,7 @@ from functools import lru_cache
 SONGS_INDEX_PATH = os.environ.get(
     "SONGS_INDEX_PATH", os.path.join(os.path.dirname(__file__), "..", "data", "songs_index.json")
 )
-SONGS_ROOT = os.environ.get("SONGS_ROOT", "/Naveen/songs")
+SONGS_ROOT = os.environ.get("SONGS_ROOT", "/Naveen/songs").rstrip("/")
 
 _MATCH_THRESHOLD = 0.45
 
@@ -24,6 +24,12 @@ def _load_songs() -> list[dict]:
 
 
 def _song_path(song: dict) -> str:
+    # Optional per-song override: set "path" (relative to SONGS_ROOT) in songs_index.json for any
+    # entry whose real on-card filename doesn't cleanly match "{album}/{title}.mp3" - e.g. files
+    # kept with their original download-site names (track number prefix, "[www.site.com]" suffix)
+    # or sitting flat in SONGS_ROOT with no album subfolder.
+    if song.get("path"):
+        return f"{SONGS_ROOT}/{song['path']}"
     return f"{SONGS_ROOT}/{song['album']}/{song['title']}.mp3"
 
 

@@ -20,39 +20,16 @@
 //   as a dependency) — status OLED, see the "OLED status display" section below.
 #include <time.h>   // NTP-synced clock for the idle screen's occasional time display
 #include <math.h>   // sinf/lroundf for the idle face's breathing animation
-#include <vector>
-#include <algorithm>
 
 #include <AudioFileSourceFS.h>
 #include <AudioGeneratorMP3.h>
 #include <AudioOutput.h>
-#include <HTTPClient.h>
-#include <WiFiClientSecure.h>
-// ^ HTTPClient/WiFiClientSecure are bundled with the esp32 Arduino core - no Library Manager
-//   install needed. Used only for downloadAndPlaySong()'s one-shot HTTPS GET of a specific song
-//   file (see the "Download-and-play song" section below).
-// ^ Library: "ESP8266Audio" by Earle F. Philhower, III — install via Arduino IDE Library Manager,
-//   search "ESP8266Audio", then verify these headers resolve. The MP3 decoder feeds a local SD
-//   file (AudioFileSourceFS) - see the "Music playback" section below. Playback is fed through our
-//   own I2S_speaker (via a custom AudioOutput subclass) rather than the library's own
-//   AudioOutputI2S, so it shares the exact same I2S peripheral/pins TTS already uses instead of a
-//   second driver instance fighting over them.
-
-#include <Audio.h>
-// ^ Library: "ESP32-audioI2S" by schreibfaul1 — install via Arduino IDE Library Manager, search
-//   "ESP32-audioI2S", then verify <Audio.h> resolves. Used ONLY for internet radio (see the
-//   "Internet radio" section below), as a second, separate playback engine from ESP8266Audio
-//   above: unlike AudioFileSourceICYStream (http-only, MP3-only - what this file used to use for
-//   radio), this library's connecttohost() handles https:// streams (its own internal
-//   WiFiClientSecure) and HLS (.m3u8) playlists, both of which several known-working stations the
-//   backend can send (see services/radio.py's KNOWN_STATIONS) actually need. It owns its own
-//   internal I2S driver rather than going through our shared I2SClass I2S_speaker, so
-//   playRadioUrl()/stopRadio() below are careful to fully release one before the other takes the
-//   physical BCLK/LRC/DOUT pins - local SD-card playback is untouched, still ESP8266Audio, since
-//   that path isn't broken. NOTE: exact cleanup semantics (whether ~Audio() releases the I2S
-//   driver) and the audio_eof_stream()/audio_info() callback signatures below vary a bit across
-//   ESP32-audioI2S releases - this mirrors a hand-tested reference sketch but wasn't verified
-//   against real hardware in this change, so confirm on-device before relying on it.
+// ^ Library: "ESP8266Audio" by Earle F. Philhower, III — install via Arduino IDE Library
+//   Manager, search "ESP8266Audio", then verify these headers resolve. Decodes local SD-card
+//   MP3s (see the "Music playback" section below) - playback is fed through our own I2S_speaker
+//   (via a custom AudioOutput subclass) rather than the library's own AudioOutputI2S, so it
+//   shares the exact same I2S peripheral/pins TTS already uses instead of a second driver
+//   instance fighting over them.
 
 // ====== EDIT THESE ======================================================
 // WiFi credentials are no longer hardcoded here - they're entered once via a captive-portal
@@ -68,7 +45,7 @@
 // yet - cloudflared quick-tunnel hostnames rotate, so the real value normally comes from NVS
 // (see loadVpsHost()) and is entered/updated through the same setup portal as WiFi, without a
 // re-flash. Edit this default too if you'd like a fresh flash to start pointed somewhere sane.
-#define VPS_HOST_DEFAULT "belief-remain-reporting-puzzle.trycloudflare.com"     // cloudflared host, e.g. "abc-def-ghi.trycloudflare.com" — no "https://" prefix, no trailing slash
+#define VPS_HOST_DEFAULT "earnings-grade-heat-acknowledge.trycloudflare.com"     // cloudflared host, e.g. "abc-def-ghi.trycloudflare.com" — no "https://" prefix, no trailing slash
 #define VPS_PORT        443                        // cloudflared serves over standard HTTPS/wss port, not the backend's local --port
 #define VPS_WS_PATH     "/api/ws/voice"            // wss:// via cloudflared — still no auth (see backend README)
 
@@ -82,7 +59,6 @@
 #define SD_MMC_CMD      38
 #define SD_MMC_D0       40    // 1-bit mode - only D0 wired; pass false to SD_MMC.begin() for 4-bit if D1-D3 are too
 #define SD_SERVER_PORT  8080  // separate port from the WiFi-setup portal's WebServer (port 80, AP-mode only)
-#define MAX_UPLOAD_BYTES (50UL * 1024 * 1024)   // reject uploads larger than this (worst-case device-busy time)
 
 #define NTP_SERVER      "pool.ntp.org"
 #define GMT_OFFSET_SEC  19800 // IST (Hyderabad) = UTC+5:30 = 5*3600 + 30*60
@@ -104,16 +80,8 @@
 
 #define SAMPLE_RATE_HZ   16000
 #define MIC_SHIFT           13     // PROVEN loud value from your bench test
-#define RECORD_SECONDS      15     // hard safety cap on total buffered audio, regardless of VAD state
+#define RECORD_SECONDS      15     // safety cap; recording normally stops early on the second tap
 #define RECORD_BUFFER_BYTES (SAMPLE_RATE_HZ * 2 * RECORD_SECONDS)
-
-// Voice-activity detection for hands-free listening (see startListening()/vadListenTick()).
-// VAD_RMS_THRESHOLD is a simple energy threshold, not a calibrated calculation - it depends on
-// mic gain (MIC_SHIFT above) and room noise floor, so expect to retune it on-device (log live RMS
-// to Serial during bring-up, same debug print vadListenTick() emits on send).
-#define VAD_RMS_THRESHOLD        600     // RMS above this over a chunk counts as "speech"
-#define VAD_TRAILING_SILENCE_MS  2000    // pause this long after speech ends before we send
-#define VAD_NO_SPEECH_TIMEOUT_MS 10000   // give up and return to Idle if no speech starts within this long
 
 #define I2S_SPK_BCLK    15    // MAX98357 BCLK
 #define I2S_SPK_LRC     16    // MAX98357 LRC (WS)
@@ -122,30 +90,17 @@
 
 #define TTS_SAMPLE_RATE_HZ 24000   // must match services/tts.py SAMPLE_RATE on the backend
 
-// How often to feed the speaker a silent I2S slice while sendAudioToBackend() (or
-// vadListenTick()'s per-chunk mic read) is otherwise occupying loop() (and therefore
-// drainTtsRing()) for a stretch. Without
+// How often to feed the speaker a silent I2S slice while recordUntilStop()/sendAudioToBackend()
+// are otherwise blocking loop() (and therefore drainTtsRing()) for seconds at a time. Without
 // this, the MAX98357 loses its BCLK/WS clock lock during that gap and the first ~1-2s of the
-// *next* reply comes out as noise/static while it re-syncs. Was 200ms, which still left the amp
-// desynced (noise every time, right after recording) - the ~179ms silent gaps between bursts were
-// too long. Shortened to 50ms per this comment's own "tunable: shorten if noise persists"; drop it
-// further (e.g. 25ms) if static still shows up. If recording/STT quality ever regresses, that's
-// the tradeoff to weigh against (see feedSilentSlice() call sites) - I2S_mic reads via its own
-// DMA buffer though, so the ~21ms speaker-write stalls this causes shouldn't drop mic samples.
-#define SPEAKER_KEEPALIVE_MS 50
+// *next* reply comes out as noise/static while it re-syncs. Tunable: shorten if noise persists,
+// lengthen only if it turns out to cost recording quality (unlikely - see feedSilentSlice() call sites).
+#define SPEAKER_KEEPALIVE_MS 200
 
 I2SClass I2S_mic;
 I2SClass I2S_speaker;
 uint8_t* recBuffer = nullptr;
 size_t   recBytes  = 0;
-
-// Hands-free VAD listening state (see startListening()/vadListenTick()). `listening` is true from
-// the moment a fresh listen begins (touch, or auto re-entry after a reply finishes) until either
-// the 2s-trailing-silence send trigger or the 10s-no-speech/touch-cancel abandon path clears it.
-bool     listening        = false;
-bool     vadSpeechStarted = false;   // true once RMS has crossed VAD_RMS_THRESHOLD at least once
-uint32_t vadListenStartMs = 0;       // millis() when this listen began - gates the no-speech timeout
-uint32_t vadLastSpeechMs  = 0;       // millis() of the most recent above-threshold chunk
 
 int  g_volumePercent = 150;   // TTS playback volume: 0=mute, 100=unity gain, up to 150=boosted (may clip)
 bool wsConnected     = false;
@@ -157,6 +112,17 @@ bool waitingForReply = false;
 // pushTtsBytes below) - this flag lets us silently discard exactly that leftover,
 // without touching state that now belongs to the new turn we've already started.
 bool ignoreIncomingAudio = false;
+
+// Music playback state (see the "Music playback" section below, and its webSocketEvent()
+// "play_song"/"stop_song" handlers). A queued song is deferred rather than started the instant
+// its WS message arrives, since the backend sends it right after "audio_end" - but this device's
+// own TTS ring buffer may still have seconds of that turn's "Playing X now" confirmation audio
+// left to play out. loop() starts g_pendingSong* once waitingForReply naturally clears.
+bool     musicPlaying     = false;
+bool     g_songPending    = false;
+String   g_pendingSongPath;
+String   g_pendingSongTitle;
+String   g_currentTrackName;
 
 bool     touchLastState = false;   // last-seen digitalRead(TOUCH_PIN), for rising-edge detection
 uint32_t touchLastTapMs = 0;       // millis() of the last recognized tap, for debouncing
@@ -263,11 +229,9 @@ void drawWifiIcon(int16_t x, int16_t y) {
   if (!g_wifiConnected) display.drawLine(x, y, x + 12, y + 11, SSD1306_WHITE);
 }
 
-// Two rounded-square ("squircle") eyes plus a permanent smile arc, centered - the cute
-// robot-face look. Eyes are normally open; briefly squash flat (blink) then settle into
-// a curved "happy" shape while a mood animation (see playMood) is active.
-static const int16_t EYE_W = 10;   // squircle width - fixed; only height breathes/blinks
-
+// Two round eyes plus a permanent smile arc, centered - a proper smiley face. Eyes are
+// normally open; briefly close then settle into a curved "happy" shape while a mood
+// animation (see playMood) is active.
 void drawFaceIcon(int16_t cx, int16_t cy) {
   int8_t eyeShape = 0;   // 0 = open, 1 = closed (blink), 2 = happy/curious (curved)
   if (g_moodUntilMs != 0) {
@@ -275,9 +239,9 @@ void drawFaceIcon(int16_t cx, int16_t cy) {
     eyeShape = (elapsed < 300 && (elapsed / 100) % 2 == 0) ? 1 : 2;
   }
 
-  // Breathing: eye height / smile radius pulses +/-1px on a slow sine cycle.
+  // Breathing: eye/smile radius pulses +/-1px on a slow sine cycle.
   float breath = sinf((millis() % BREATH_PERIOD_MS) / (float)BREATH_PERIOD_MS * 2 * PI);
-  int16_t eyeH   = 12 + (int16_t)lroundf(breath);   // 11..13, squircle eye height
+  int16_t eyeR   = 4 + (int16_t)lroundf(breath);   // 3..5
   int16_t smileR = 8 + (int16_t)lroundf(breath);   // 7..9
 
   // Curious glance: while eyes are open (not blinking/mood), briefly offset the pupil
@@ -295,14 +259,12 @@ void drawFaceIcon(int16_t cx, int16_t cy) {
   for (int i = -1; i <= 1; i += 2) {
     int16_t ex = cx + i * eyeDX;
     if (eyeShape == 1) {
-      // closed: squircle squashed flat into a thin rounded eyelid
-      display.fillRoundRect(ex - EYE_W / 2, eyeY - 1, EYE_W, 3, 1, SSD1306_WHITE);
+      display.drawFastHLine(ex - 4, eyeY, 8, SSD1306_WHITE);          // closed: flat line
     } else if (eyeShape == 2) {
       display.drawCircleHelper(ex, eyeY + 4, 5, 0x3, SSD1306_WHITE);  // happy: upward curve
     } else {
-      // open: rounded-square squircle eye
-      display.fillRoundRect(ex - EYE_W / 2, eyeY - eyeH / 2, EYE_W, eyeH, 3, SSD1306_WHITE);
-      display.fillCircle(ex + pupilDX, eyeY + pupilDY, 1, SSD1306_BLACK);   // pupil (glance offset)
+      display.fillCircle(ex, eyeY, eyeR, SSD1306_WHITE);                       // open: round eye
+      display.fillCircle(ex + pupilDX, eyeY + pupilDY, 1, SSD1306_BLACK);      // pupil (glance offset)
     }
   }
   display.drawCircleHelper(cx, cy + 4, smileR, 0xC, SSD1306_WHITE);   // smile: bottom arc of a circle
@@ -454,13 +416,13 @@ void displayInit() {
 // WiFi-connect wait loop in setup() so the display animates instead of sitting blank,
 // without adding any extra delay of its own (it reuses that loop's existing wait).
 void drawBootFrame(uint8_t step) {
-  static const uint8_t openness[] = {1, 2, 4, 6, 10, 12};   // eyelid height in px: closed -> fully open (matches drawFaceIcon's ~12px open eye)
+  static const uint8_t openness[] = {1, 2, 4, 6, 8, 8};   // eyelid height in px: closed -> open
   uint8_t h = openness[step % 6];
   display.clearDisplay();
   display.drawFastHLine(0, 11, 128, SSD1306_WHITE);
   for (int i = -1; i <= 1; i += 2) {
     int16_t ex = ICON_CX + i * 9;
-    display.fillRoundRect(ex - EYE_W / 2, ICON_CY - h / 2, EYE_W, h, min((uint8_t)3, (uint8_t)(h / 2)), SSD1306_WHITE);
+    display.fillRect(ex - 4, ICON_CY - h / 2, 8, h, SSD1306_WHITE);
   }
   drawLabel("WAKING UP");
   display.display();
@@ -506,14 +468,14 @@ void playCheersAnimation() {
 // to the full STATE_RECORDING waveform screen - purely cosmetic, kept short (~150ms total)
 // so it doesn't add noticeable latency to the mic capture that starts right after.
 void playWakeAnimation() {
-  static const uint8_t openness[] = {2, 5, 12};
+  static const uint8_t openness[] = {2, 5, 8};
   for (uint8_t i = 0; i < 3; i++) {
     display.clearDisplay();
     display.drawFastHLine(0, 11, 128, SSD1306_WHITE);
     drawWifiIcon(128 - 14, 0);
     for (int s = -1; s <= 1; s += 2) {
       int16_t ex = ICON_CX + s * 9;
-      display.fillRoundRect(ex - EYE_W / 2, ICON_CY - openness[i] / 2, EYE_W, openness[i], min((uint8_t)3, (uint8_t)(openness[i] / 2)), SSD1306_WHITE);
+      display.fillRect(ex - 4, ICON_CY - openness[i] / 2, 8, openness[i], SSD1306_WHITE);
     }
     drawLabel("LISTENING");
     display.display();
@@ -613,8 +575,9 @@ void writeWavHeader(uint8_t* h, uint32_t pcmBytes, uint32_t sr) {
 
 // Edge-triggered: returns true exactly once per physical tap (LOW->HIGH transition on
 // TOUCH_PIN), gated by a debounce window so contact bounce/noise can't register as
-// multiple taps. Only ever called once per loop() iteration (both the tap-to-start check and
-// the cancel-while-listening check in loop() share the single `tapped` value computed there).
+// multiple taps. Safe to call from both loop() (to detect the start tap) and
+// recordUntilStop() (to detect the stop tap) since they never run in the same instant -
+// recordUntilStop() blocks loop() entirely until it returns.
 bool touchTapped() {
   bool state = digitalRead(TOUCH_PIN) == HIGH;
   bool tapped = state && !touchLastState && (millis() - touchLastTapMs > TOUCH_DEBOUNCE_MS);
@@ -651,42 +614,41 @@ bool checkRuntimeLongHoldForWifiReset() {
   return true;   // held continuously through the whole window
 }
 
-// Begins a fresh hands-free listen: resets VAD/recording state, shows the listening UI, and
-// plays the wake flourish. Used on a touch-to-start (idle) and on touch-interrupt during
-// music/reply playback (see loop()).
-void startListening() {
+// Records until a second tap is detected (edge-triggered via touchTapped(), same as the tap
+// that started this recording) or RECORD_SECONDS elapses as a safety cap. Reusing touchTapped()
+// here is safe per its own comment: it never runs concurrently with loop()'s call to it, since
+// this function blocks loop() entirely until it returns.
+void recordUntilStop() {
   recBytes = 0;
-  vadSpeechStarted = false;
-  vadListenStartMs = millis();
-  vadLastSpeechMs  = 0;
-  listening = true;
-  playWakeAnimation();
-  updateDisplay(STATE_RECORDING);
-}
-
-// Same as startListening() but skips the wake animation - used when a regular reply finishes and
-// we automatically re-enter listening without a fresh touch (see drainTtsRing()), so a natural
-// conversation continuation doesn't visually stutter.
-void resumeListening() {
-  recBytes = 0;
-  vadSpeechStarted = false;
-  vadListenStartMs = millis();
-  vadLastSpeechMs  = 0;
-  listening = true;
-  updateDisplay(STATE_RECORDING);
-}
-
-// DC-removal + peak/RMS debug pass over the just-finished recording buffer, run once right before
-// sendAudioToBackend(). Previously done inline at the end of the old blocking recordUntilStop();
-// separated out because VAD now needs its own lightweight per-chunk RMS while listening (see
-// vadListenTick()), which doesn't need (or want) the DC-removed values.
-void finalizeRecording(uint32_t listenStartMs) {
+  int32_t raw[256];
   int16_t* out = (int16_t*)recBuffer;
-  size_t cnt = recBytes / 2;
+  size_t cnt = 0;
+  long long sum = 0;
+  uint32_t startMs = millis();
+  uint32_t lastSpeakerFeedMs = startMs;   // see feedSilentSlice() - keeps the amp's clock locked
+                                          // through however long this recording turns out to last
+
+  while (recBytes < RECORD_BUFFER_BYTES && (millis() - startMs) < RECORD_SECONDS * 1000UL) {
+    size_t bytesRead = I2S_mic.readBytes((char*)raw, sizeof(raw));
+    if (bytesRead > 0) {
+      size_t n = bytesRead / 4;
+      for (size_t i = 0; i < n; i++) {
+        if (recBytes + 2 > RECORD_BUFFER_BYTES) break;
+        int32_t s = raw[i] >> MIC_SHIFT;
+        if (s > 32767) s = 32767; else if (s < -32768) s = -32768;
+        out[cnt++] = (int16_t)s;
+        sum += s;
+        recBytes += 2;
+      }
+    }
+    if (millis() - lastSpeakerFeedMs >= SPEAKER_KEEPALIVE_MS) {
+      feedSilentSlice();
+      lastSpeakerFeedMs = millis();
+    }
+    if (touchTapped()) break;   // second tap = stop recording and send
+  }
   if (cnt == 0) { Serial.println("no samples"); return; }
 
-  long long sum = 0;
-  for (size_t i = 0; i < cnt; i++) sum += out[i];
   int16_t dc = (int16_t)(sum / (long long)cnt);
   int16_t peak = 0; double sumSq = 0;
   for (size_t i = 0; i < cnt; i++) {
@@ -699,66 +661,7 @@ void finalizeRecording(uint32_t listenStartMs) {
   }
   int rms = (int)sqrt(sumSq / cnt);
   Serial.printf("<<< REC STOP  %.2fs  bytes=%u  peak=%d  RMS=%d  DC=%d\n",
-                (millis() - listenStartMs)/1000.0f, (unsigned)recBytes, (int)peak, rms, (int)dc);
-}
-
-// Non-blocking VAD step - called once per loop() iteration while `listening` (see loop()). Reads
-// one chunk of mic samples (same shift/clip logic the old blocking recordUntilStop() used) into
-// recBuffer, computes RMS over just that chunk, and decides whether to keep listening, send (2s
-// of trailing silence after speech started, or the RECORD_BUFFER_BYTES hard cap), or abandon back
-// to Idle (10s elapsed with no speech detected at all).
-void vadListenTick() {
-  static uint32_t lastSpeakerFeedMs = 0;
-  int32_t raw[256];
-  int16_t* out = (int16_t*)recBuffer;
-  size_t cnt = recBytes / 2;
-
-  size_t bytesRead = I2S_mic.readBytes((char*)raw, sizeof(raw));
-  size_t chunkSamples = 0;
-  long long chunkSumSq = 0;
-  if (bytesRead > 0) {
-    size_t n = bytesRead / 4;
-    for (size_t i = 0; i < n; i++) {
-      if (recBytes + 2 > RECORD_BUFFER_BYTES) break;
-      int32_t s = raw[i] >> MIC_SHIFT;
-      if (s > 32767) s = 32767; else if (s < -32768) s = -32768;
-      out[cnt++] = (int16_t)s;
-      chunkSumSq += (long long)s * s;
-      chunkSamples++;
-      recBytes += 2;
-    }
-  }
-
-  if (millis() - lastSpeakerFeedMs >= SPEAKER_KEEPALIVE_MS) {
-    feedSilentSlice();
-    lastSpeakerFeedMs = millis();
-  }
-
-  if (chunkSamples > 0) {
-    int rms = (int)sqrt((double)chunkSumSq / chunkSamples);
-    if (rms > VAD_RMS_THRESHOLD) {
-      if (!vadSpeechStarted) Serial.printf("[VAD] speech detected (rms=%d)\n", rms);
-      vadSpeechStarted = true;
-      vadLastSpeechMs = millis();
-    }
-  }
-
-  bool hardCapHit = (recBytes >= RECORD_BUFFER_BYTES);
-  if (hardCapHit || (vadSpeechStarted && millis() - vadLastSpeechMs > VAD_TRAILING_SILENCE_MS)) {
-    listening = false;
-    Serial.println(hardCapHit ? "<<< VAD SEND (hit hard cap)" : "<<< VAD SEND (2s pause)");
-    finalizeRecording(vadListenStartMs);
-    updateDisplay(STATE_PROCESSING);
-    sendAudioToBackend();
-    return;
-  }
-
-  if (!vadSpeechStarted && millis() - vadListenStartMs > VAD_NO_SPEECH_TIMEOUT_MS) {
-    listening = false;
-    Serial.println("<<< VAD TIMEOUT - no speech detected, back to idle");
-    updateDisplay(STATE_IDLE);
-    return;
-  }
+                (millis() - startMs)/1000.0f, (unsigned)recBytes, (int)peak, rms, (int)dc);
 }
 
 // Streams recBuffer to the backend over the already-open WebSocket, then sends the
@@ -813,8 +716,8 @@ void pushTtsBytes(const uint8_t* data, size_t len) {
 // MAX98357 need a steady clock to stay locked; going fully silent (no write() calls) lets it
 // drift out of lock, so the first real samples of the next reply come out garbled while it
 // re-syncs. Feeding zeros is cheap insurance against that - called from drainTtsRing() every
-// idle loop() iteration, and periodically from vadListenTick()/sendAudioToBackend() too, since
-// sendAudioToBackend() blocks loop() (and therefore drainTtsRing()) for seconds at a time otherwise.
+// idle loop() iteration, and periodically from recordUntilStop()/sendAudioToBackend() too,
+// since those block loop() (and therefore drainTtsRing()) for seconds at a time otherwise.
 void feedSilentSlice() {
   const size_t sliceSamples = 512;
   uint8_t stereoBuf[sliceSamples * 4];  // MAX98357 needs a full L+R frame per sample
@@ -838,12 +741,9 @@ void drainTtsRing() {
       speakingShown = false;
       ttsPrebufferPrimed = false;
       fadeInSamplesRemaining = 0;
+      updateDisplay(STATE_IDLE);
       playMood(900);   // quick happy/curious blink - a successful reply just finished
       Serial.println("[WS] reply complete\n==================================================\n");
-      // Per the target flow, a finished regular reply re-enters Listening (not Idle) so the
-      // conversation can continue without another touch - touch-based barge-in is still the only
-      // way to interrupt playback (see loop()), but completion auto-advances into listening.
-      resumeListening();
     }
     feedSilentSlice();
     return;
@@ -964,30 +864,21 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
           setDisplayError(ERR_API);
           Serial.printf("[WS] error: %s\n", (const char*)(doc["detail"] | ""));
         }
-      } else if (t == "radio") {
-        String url  = (const char*)(doc["url"]  | "");
-        String name = (const char*)(doc["name"] | "");
-        if (url.length()) {
-          Serial.printf("[WS] radio request: %s (%s)\n", name.c_str(), url.c_str());
-          startRadio(url, name);
-        }
-      } else if (t == "stop_radio") {
-        stopRadio();
-      } else if (t == "download_song") {
-        String url   = (const char*)(doc["url"]   | "");
-        String title = (const char*)(doc["title"] | "");
-        if (url.length()) {
-          Serial.printf("[WS] download_song request: %s (%s)\n", title.c_str(), url.c_str());
-          downloadAndPlaySong(url, title);
-        }
       } else if (t == "play_song") {
         String path  = (const char*)(doc["path"]  | "");
         String title = (const char*)(doc["title"] | "");
         if (sdReady && path.length() && isMp3(path)) {
-          Serial.printf("[WS] play_song request: %s (%s)\n", title.c_str(), path.c_str());
-          playSongFile(path);
+          // Deferred to loop() rather than started here - see g_songPending's comment above.
+          g_pendingSongPath  = path;
+          g_pendingSongTitle = title;
+          g_songPending = true;
+          Serial.printf("[WS] play_song queued: %s (%s)\n", title.c_str(), path.c_str());
+        } else {
+          Serial.printf("[WS] play_song ignored (sdReady=%s, path=\"%s\")\n",
+                        sdReady ? "true" : "false", path.c_str());
         }
       } else if (t == "stop_song") {
+        g_songPending = false;
         stopMusic();
       }
       break;
@@ -1226,428 +1117,6 @@ const char* sdCardTypeName(uint8_t type) {
   }
 }
 
-// ---- Music playback (MP3 files on the SD card, controlled from the file browser below) ---
-// Reuses the exact I2S_speaker instance drainTtsRing() already drives for TTS - AudioGeneratorMP3
-// decodes into I2SMusicOutput::ConsumeSample() below, which buffers frames and writes them out via
-// the same I2SClass, instead of pulling in ESP8266Audio's own AudioOutputI2S (which uses the older
-// esp-idf i2s driver directly and would fight over the same pins/peripheral). Playback and TTS
-// never run concurrently: starting a song fully owns I2S_speaker (reconfigured to the song's own
-// sample rate) until stopMusic() - called on a touch, or the web /stop button - hands the speaker
-// back to drainTtsRing() at TTS_SAMPLE_RATE_HZ.
-//
-// ConsumeSample() must never block: AudioGeneratorMP3::loop() calls it once per decoded sample,
-// synchronously, from inside musicLoop() - any blocking I2S write there would stall loop() (and
-// therefore fileServer.handleClient()) for as long as the whole decoded frame takes to play out.
-// So it's a fast, non-blocking producer into musicRing, mirroring pushTtsBytes()/ttsRing; the
-// actual paced I2S_speaker.write() happens once per loop() iteration in drainMusicRing() below.
-// Returning false (instead of always true) is the decoder's documented backpressure signal - it
-// safely retries the same sample next call once the ring has room.
-#define MUSIC_RING_BYTES 262144   // 256KiB: ~1.5s of buffered 44.1kHz/16-bit stereo audio (PSRAM)
-uint8_t* musicRing = nullptr;
-size_t   musicHead = 0;   // next write index (producer: I2SMusicOutput::ConsumeSample)
-size_t   musicTail = 0;   // next read index  (consumer: drainMusicRing)
-size_t   musicFill = 0;   // bytes currently buffered
-bool     musicDecoderDone = false;   // true once mp3Decoder->loop() returns false (EOF/error)
-
-class I2SMusicOutput : public AudioOutput {
- public:
-  bool begin() override { return true; }
-  bool stop() override { return true; }
-  bool SetRate(int hz) override {
-    AudioOutput::SetRate(hz);
-    I2S_speaker.end();
-    I2S_speaker.setPins(I2S_SPK_BCLK, I2S_SPK_LRC, I2S_SPK_DOUT, -1);
-    I2S_speaker.begin(I2S_MODE_STD, hz, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
-    return true;
-  }
-  bool ConsumeSample(int16_t sample[2]) override {
-    if (musicFill + 4 > MUSIC_RING_BYTES) return false;   // ring full - decoder retries this sample
-    size_t firstPart = MUSIC_RING_BYTES - musicHead;
-    if (firstPart >= 4) {
-      memcpy(musicRing + musicHead, sample, 4);
-    } else {
-      memcpy(musicRing + musicHead, sample, firstPart);
-      memcpy(musicRing, (uint8_t*)sample + firstPart, 4 - firstPart);
-    }
-    musicHead = (musicHead + 4) % MUSIC_RING_BYTES;
-    musicFill += 4;
-    return true;
-  }
-};
-
-bool                 musicPlaying = false;
-std::vector<String>  g_playlist;
-int                  g_playlistIndex = -1;
-String               g_currentTrackName;
-
-AudioFileSource*    mp3Source  = nullptr;   // AudioFileSourceFS - local SD music only now (see the "Internet radio" section below for radio's separate engine)
-AudioGeneratorMP3*  mp3Decoder = nullptr;
-I2SMusicOutput*     mp3Output  = nullptr;
-
-bool isMp3(const String& name) {
-  String lower = name;
-  lower.toLowerCase();
-  return lower.endsWith(".mp3");
-}
-
-String dirnameOf(const String& path) {
-  int idx = path.lastIndexOf('/');
-  return idx <= 0 ? "/" : path.substring(0, idx);
-}
-
-// Back to TTS's fixed sample rate once a song finishes/stops - mirrors I2SMusicOutput::SetRate()
-// above, just restoring the other side of the same speaker instance.
-void restoreSpeakerForTts() {
-  I2S_speaker.end();
-  I2S_speaker.setPins(I2S_SPK_BCLK, I2S_SPK_LRC, I2S_SPK_DOUT, -1);
-  I2S_speaker.begin(I2S_MODE_STD, TTS_SAMPLE_RATE_HZ, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
-}
-
-// Non-recursive: every .mp3 sibling of selectedPath, sorted, so Next walks through one
-// folder/album at a time exactly as browsed - not the whole card.
-void buildPlaylist(const String& folder, const String& selectedPath) {
-  g_playlist.clear();
-  File dir = SD_MMC.open(folder);
-  if (dir && dir.isDirectory()) {
-    File entry = dir.openNextFile();
-    while (entry) {
-      if (!entry.isDirectory()) {
-        String name = entry.name();
-        String full = name.startsWith("/") ? name : folder + (folder.endsWith("/") ? "" : "/") + name;
-        if (isMp3(full)) g_playlist.push_back(full);
-      }
-      entry = dir.openNextFile();
-    }
-  }
-  std::sort(g_playlist.begin(), g_playlist.end());
-  g_playlistIndex = -1;
-  for (size_t i = 0; i < g_playlist.size(); i++) {
-    if (g_playlist[i] == selectedPath) { g_playlistIndex = (int)i; break; }
-  }
-}
-
-bool startSongAtIndex(int idx) {
-  if (!musicRing) return false;   // ps_malloc failed at boot - music playback unavailable
-  if (idx < 0 || idx >= (int)g_playlist.size()) return false;
-  if (mp3Decoder) { mp3Decoder->stop(); delete mp3Decoder; mp3Decoder = nullptr; }
-  if (mp3Source)  { mp3Source->close(); delete mp3Source;  mp3Source  = nullptr; }
-  musicHead = musicTail = musicFill = 0;
-  musicDecoderDone = false;
-
-  String path = g_playlist[idx];
-  mp3Source = new AudioFileSourceFS(SD_MMC, path.c_str());
-  if (!mp3Output) mp3Output = new I2SMusicOutput();
-  mp3Decoder = new AudioGeneratorMP3();
-  if (!mp3Decoder->begin(mp3Source, mp3Output)) {
-    Serial.printf("[music] failed to start %s\n", path.c_str());
-    delete mp3Decoder; mp3Decoder = nullptr;
-    delete mp3Source;  mp3Source  = nullptr;
-    return false;
-  }
-  g_playlistIndex    = idx;
-  g_currentTrackName = path.substring(path.lastIndexOf('/') + 1);
-  musicPlaying       = true;
-  Serial.printf("[music] playing %s (%d/%d)\n", path.c_str(), idx + 1, (int)g_playlist.size());
-  updateDisplay(STATE_MUSIC, g_currentTrackName.c_str());
-  return true;
-}
-
-void stopMusic() {
-  if (!musicPlaying) return;
-  if (mp3Decoder) { mp3Decoder->stop(); delete mp3Decoder; mp3Decoder = nullptr; }
-  if (mp3Source)  { mp3Source->close(); delete mp3Source;  mp3Source  = nullptr; }
-  musicHead = musicTail = musicFill = 0;
-  musicDecoderDone = false;
-  musicPlaying = false;
-  restoreSpeakerForTts();
-  updateDisplay(STATE_IDLE);
-  Serial.println("[music] stopped");
-}
-
-void playSongFile(const String& path) {
-  buildPlaylist(dirnameOf(path), path);
-  int idx = g_playlistIndex;
-  if (idx < 0) {
-    // Requested file wasn't matched back in its own folder listing (shouldn't normally happen) -
-    // fall back to a one-track "playlist" of just this file so Play still works.
-    g_playlist.clear();
-    g_playlist.push_back(path);
-    idx = 0;
-  }
-  startSongAtIndex(idx);
-}
-
-void nextSong() {
-  if (g_playlist.empty()) return;
-  int next = g_playlistIndex + 1;
-  if (next >= (int)g_playlist.size()) { stopMusic(); return; }   // end of the folder - stop, don't loop silently
-  startSongAtIndex(next);
-}
-
-// ---- Internet radio (voice-triggered via the "radio"/"stop_radio" WS messages below) ------
-// A separate playback engine from local SD music above - schreibfaul1's "ESP32-audioI2S" Audio
-// class (see the #include comment near the top), not ESP8266Audio's mp3Decoder/musicRing pipeline.
-// radioPlaying still marks the sub-mode, gating loop()'s dispatch between musicLoop() (SD files)
-// and radioLoop() (this engine) below.
-#define RADIO_MAX_RETRIES  3   // give up (rather than hot-loop reconnecting) after this many failures in a row
-
-bool          radioPlaying       = false;
-int           radioRetryCount    = 0;
-String        g_radioUrl;
-String        g_radioName;
-Audio*        radioAudio         = nullptr;
-volatile bool g_radioStreamEnded = false;   // set by the audio_eof_stream() callback further down
-
-// ---- ESP32-audioI2S callbacks - plain global functions the library calls by name (weak-linked,
-// so defining them here overrides its no-op defaults), not tied to any particular Audio instance -
-// fine since only one (radioAudio) is ever alive at a time. ----------------------------------
-void audio_info(const char *info) {
-  Serial.printf("[radio] %s\n", info);
-}
-void audio_showstation(const char *station) {
-  Serial.printf("[radio] station: %s\n", station);
-}
-void audio_showstreamtitle(const char *title) {
-  Serial.printf("[radio] now playing: %s\n", title);
-}
-void audio_eof_stream(const char *info) {
-  // Internet radio has no natural EOF - reaching here means the stream dropped or errored. Just
-  // flag it for radioLoop() to act on rather than calling reconnectRadio() directly: this fires
-  // from inside radioAudio->loop(), and reconnectRadio() deletes/reallocates that very object.
-  Serial.printf("[radio] stream ended: %s\n", info);
-  g_radioStreamEnded = true;
-}
-
-// Connecting to the stream (DNS + TCP + HTTP headers) blocks loop() for as long as it takes, same
-// tradeoff already accepted elsewhere in this file (see handleSdDownload()'s comment) - fine for an
-// occasional "play radio X" request, but the voice pipeline/OLED will pause briefly while it connects.
-void playRadioUrl(const String& url, const String& name) {
-  if (musicPlaying) { if (radioPlaying) stopRadio(); else stopMusic(); }
-
-  // radioAudio owns its own internal I2S driver, separate from the I2SClass (ESP_I2S) instance
-  // TTS/SD-music share as I2S_speaker - release that one first so the two never fight over the
-  // same physical BCLK/LRC/DOUT pins.
-  I2S_speaker.end();
-
-  g_radioStreamEnded = false;
-  radioAudio = new Audio();
-  radioAudio->setPinout(I2S_SPK_BCLK, I2S_SPK_LRC, I2S_SPK_DOUT);
-  radioAudio->setVolume(21);   // 0-21 - this library's own scale, separate from g_volumePercent
-
-  if (!radioAudio->connecttohost(url.c_str())) {
-    Serial.printf("[radio] failed to start stream: %s\n", url.c_str());
-    delete radioAudio; radioAudio = nullptr;
-    restoreSpeakerForTts();
-    return;
-  }
-
-  g_radioUrl   = url;
-  g_radioName  = name.length() ? name : url;
-  musicPlaying = true;
-  radioPlaying = true;
-  Serial.printf("[radio] playing %s (%s)\n", g_radioName.c_str(), url.c_str());
-  updateDisplay(STATE_MUSIC, g_radioName.c_str());
-}
-
-// Entry point for a fresh, user-requested station (resets the retry counter) - as opposed to
-// reconnectRadio()'s reuse of playRadioUrl() for a dropped-stream retry.
-void startRadio(const String& url, const String& name) {
-  radioRetryCount = 0;
-  playRadioUrl(url, name);
-}
-
-void stopRadio() {
-  if (!radioPlaying) return;
-  if (radioAudio) {
-    radioAudio->stopSong();
-    delete radioAudio;   // destructor releases this library's internal I2S driver
-    radioAudio = nullptr;
-  }
-  musicPlaying = false;
-  radioPlaying = false;
-  restoreSpeakerForTts();
-  updateDisplay(STATE_IDLE);
-  Serial.println("[radio] stopped");
-}
-
-// ---- Download-and-play a specific song (voice-triggered via the "download_song" WS message
-// above, see webSocketEvent()) ---------------------------------------------------------------
-// Unlike playRadioUrl()'s live ICY stream, the backend can only ever hand us a URL it found via a
-// generic web search (see services/tools.py's download_song tool) - there's no guarantee it's
-// actually a valid direct audio file, so every failure path below just logs and leaves state
-// unchanged. There's no on-device error UX for a download-time failure specifically (as opposed
-// to a search-time failure, which the backend's own LLM reply already reports verbally) - v1
-// accepts silent-fail-and-log here.
-#define SONG_DOWNLOAD_PATH      "/downloads/current.mp3"
-#define SONG_MAX_DOWNLOAD_BYTES (20UL * 1024 * 1024)   // generous cap for a single song file
-#define SONG_DOWNLOAD_STALL_MS  15000                  // abort if no bytes arrive for this long
-
-// Always overwrites this same fixed path rather than accumulating one file per request, so
-// buildPlaylist()'s directory scan (see playSongFile()) stays trivial and SD usage stays bounded
-// across repeated "play song X" requests.
-void downloadAndPlaySong(const String& url, const String& title) {
-  if (!sdReady) { Serial.println("[song] SD card not ready - can't download"); return; }
-  if (musicPlaying) { if (radioPlaying) stopRadio(); else stopMusic(); }
-
-  SD_MMC.mkdir("/downloads");
-  if (SD_MMC.exists(SONG_DOWNLOAD_PATH)) SD_MMC.remove(SONG_DOWNLOAD_PATH);
-
-  Serial.printf("[song] downloading '%s' from %s...\n", title.c_str(), url.c_str());
-  updateDisplay(STATE_MUSIC, ("Downloading " + title).c_str());
-
-  // Connecting + downloading blocks loop() for the duration, same accepted tradeoff as
-  // playRadioUrl()'s stream connect and handleSdDownload() - fine for an occasional song request.
-  // The download loop below still calls webSocket.loop() periodically though: without it, a
-  // large/slow download can run well past the backend's ~20s WS ping_timeout with nothing
-  // servicing incoming ping frames on this connection, and the backend closes it with a
-  // "1011 keepalive ping timeout" - same class of bug as a blocking call starving an asyncio
-  // event loop's keepalive handling server-side.
-  HTTPClient http;
-  WiFiClientSecure secureClient;
-  bool began;
-  if (url.startsWith("https://")) {
-    secureClient.setInsecure();   // no cert pinning - same precedent as webSocket.beginSSL()
-    began = http.begin(secureClient, url);
-  } else {
-    began = http.begin(url);
-  }
-  if (!began) { Serial.println("[song] HTTPClient.begin() failed"); return; }
-
-  int code = http.GET();
-  if (code != HTTP_CODE_OK) {
-    Serial.printf("[song] download failed: HTTP %d\n", code);
-    http.end();
-    return;
-  }
-
-  File out = SD_MMC.open(SONG_DOWNLOAD_PATH, FILE_WRITE);
-  if (!out) {
-    Serial.println("[song] failed to open SD file for writing");
-    http.end();
-    return;
-  }
-
-  int remaining = http.getSize();   // -1 if unknown (chunked transfer)
-  WiFiClient* stream = http.getStreamPtr();
-  uint8_t buf[1024];
-  size_t total = 0;
-  uint32_t lastDataMs = millis();
-  uint32_t lastWsLoopMs = millis();
-
-  while (http.connected() && (remaining > 0 || remaining == -1) && total < SONG_MAX_DOWNLOAD_BYTES) {
-    if (millis() - lastWsLoopMs >= 50) {
-      webSocket.loop();   // keep the voice WS connection's ping/pong serviced during the download
-      lastWsLoopMs = millis();
-    }
-    size_t avail = stream->available();
-    if (avail == 0) {
-      if (millis() - lastDataMs > SONG_DOWNLOAD_STALL_MS) {
-        Serial.println("[song] download stalled - aborting");
-        break;
-      }
-      delay(5);
-      continue;
-    }
-    size_t n = stream->readBytes(buf, min(avail, sizeof(buf)));
-    if (n == 0) break;
-    out.write(buf, n);
-    total += n;
-    lastDataMs = millis();
-    if (remaining > 0) remaining -= n;
-  }
-  out.close();
-  http.end();
-
-  if (total == 0) {
-    Serial.println("[song] download produced no data - aborting playback");
-    SD_MMC.remove(SONG_DOWNLOAD_PATH);
-    return;
-  }
-
-  Serial.printf("[song] downloaded %u bytes, starting playback\n", (unsigned)total);
-  playSongFile(SONG_DOWNLOAD_PATH);
-}
-
-// Internet radio streams don't have a natural "end" the way an MP3 file does - reaching here means
-// the connection dropped or a decode error occurred, so retry a few times (transient WiFi hiccups
-// are common over a long-running stream) before giving up and handing the speaker back to TTS.
-void reconnectRadio() {
-  String url = g_radioUrl, name = g_radioName;
-  radioRetryCount++;
-  stopRadio();
-  if (radioRetryCount > RADIO_MAX_RETRIES) {
-    Serial.println("[radio] giving up after repeated stream failures");
-    radioRetryCount = 0;
-    return;
-  }
-  Serial.printf("[radio] stream ended/dropped - reconnecting (%d/%d)...\n", radioRetryCount, RADIO_MAX_RETRIES);
-  playRadioUrl(url, name);
-}
-
-// Drains musicRing at the same pace/slice-size drainTtsRing() uses for TTS (512 frames/call), so
-// I2S_speaker.write()'s blocking wait paces loop() the same bounded way in both cases, instead of
-// mp3Decoder->loop() triggering an unbounded number of blocking writes per call (the old bug).
-// Volume scaling/clipping happens here rather than in ConsumeSample(), keeping the producer side
-// a plain memcpy.
-void drainMusicRing() {
-  if (!musicRing || musicFill == 0) return;
-  const size_t sliceBytes = 512 * 4;   // 512 frames, 4 bytes/frame (int16 L + int16 R)
-  size_t n = min(sliceBytes, musicFill) & ~size_t(3);   // keep 4-byte frame alignment
-  if (n == 0) return;
-
-  uint8_t raw[sliceBytes];
-  size_t firstPart = MUSIC_RING_BYTES - musicTail;
-  if (firstPart > n) firstPart = n;
-  memcpy(raw, musicRing + musicTail, firstPart);
-  if (firstPart < n) memcpy(raw + firstPart, musicRing, n - firstPart);
-
-  size_t samples = n / 4;
-  for (size_t s = 0; s < samples; s++) {
-    int16_t l = (int16_t)(raw[s * 4]     | (raw[s * 4 + 1] << 8));
-    int16_t r = (int16_t)(raw[s * 4 + 2] | (raw[s * 4 + 3] << 8));
-    int32_t sl = ((int32_t)l * g_volumePercent) / 100;
-    int32_t sr = ((int32_t)r * g_volumePercent) / 100;
-    if (sl > 32767) sl = 32767; else if (sl < -32768) sl = -32768;
-    if (sr > 32767) sr = 32767; else if (sr < -32768) sr = -32768;
-    raw[s * 4]     = (uint8_t)(sl & 0xFF); raw[s * 4 + 1] = (uint8_t)((sl >> 8) & 0xFF);
-    raw[s * 4 + 2] = (uint8_t)(sr & 0xFF); raw[s * 4 + 3] = (uint8_t)((sr >> 8) & 0xFF);
-  }
-  I2S_speaker.write(raw, n);
-
-  musicTail = (musicTail + n) % MUSIC_RING_BYTES;
-  musicFill -= n;
-}
-
-// Called once per loop() iteration while musicPlaying, mirroring drainTtsRing()'s role for TTS.
-// The decoder step is fast now (ConsumeSample() just fills musicRing, no blocking I2S write), so
-// this always drains a slice too; a track only advances once decoding has finished *and* the ring
-// has fully drained, so the last ~1.5s of buffered audio isn't cut off early (mirrors
-// drainTtsRing()'s ttsFill==0 && audioEndReceived gate).
-void musicLoop() {
-  if (!mp3Decoder || !mp3Decoder->isRunning()) {
-    musicDecoderDone = true;
-  } else if (!mp3Decoder->loop()) {
-    mp3Decoder->stop();
-    musicDecoderDone = true;   // track finished (or hit a decode error)
-  }
-  drainMusicRing();
-  if (musicDecoderDone && musicFill == 0) {
-    nextSong();   // advance, or stop if that was the last one
-  }
-}
-
-// Called once per loop() iteration while radioPlaying, mirroring musicLoop()'s role for local SD
-// playback but driving the separate ESP32-audioI2S engine (see the "Internet radio" section above)
-// instead of the ESP8266Audio mp3Decoder/musicRing pipeline.
-void radioLoop() {
-  if (!radioAudio) return;
-  radioAudio->loop();
-  if (g_radioStreamEnded) {
-    g_radioStreamEnded = false;
-    reconnectRadio();
-  }
-}
-
 // Lists only the immediate children of dirname (no recursion) - subfolders render as links
 // back to handleSdRoot with ?path=, so the user drills in one level at a time on click.
 void listSdDir(const String& dirname, String& html) {
@@ -1662,11 +1131,7 @@ void listSdDir(const String& dirname, String& html) {
     if (entry.isDirectory()) {
       html += "<li><a href=\"/?path=" + fullPath + "\">" + leaf + "/</a></li>";
     } else {
-      html += "<li><a href=\"/download?path=" + fullPath + "\">" + leaf + "</a> (" + String(entry.size()) + " bytes)";
-      if (isMp3(fullPath)) {
-        html += " <a href=\"/play?path=" + fullPath + "&amp;back=" + dirname + "\">&#9658; Play</a>";
-      }
-      html += "</li>";
+      html += "<li><a href=\"/download?path=" + fullPath + "\">" + leaf + "</a> (" + String(entry.size()) + " bytes)</li>";
     }
     entry = root.openNextFile();
   }
@@ -1679,15 +1144,6 @@ void handleSdRoot() {
   }
   String path = fileServer.hasArg("path") ? fileServer.arg("path") : "/";
   String html = "<html><body><h3>SD Card: " + path + "</h3>";
-  if (musicPlaying) {
-    // Shown on every page, not just inside the folder a song was started from, so Stop/Next
-    // are always reachable without navigating back to wherever playback began.
-    html += "<div style=\"border:1px solid #888;padding:8px;margin-bottom:12px\">"
-            "&#9834; Now playing: <b>" + g_currentTrackName + "</b>"
-            " (" + String(g_playlistIndex + 1) + "/" + String(g_playlist.size()) + ")"
-            "&nbsp; <a href=\"/next?back=" + path + "\">Next</a>"
-            "&nbsp; <a href=\"/stop?back=" + path + "\">Stop</a></div>";
-  }
   if (path != "/") {
     int lastSlash = path.lastIndexOf('/');
     String parent = (lastSlash <= 0) ? "/" : path.substring(0, lastSlash);
@@ -1695,50 +1151,12 @@ void handleSdRoot() {
   }
   html += "<ul>";
   listSdDir(path, html);
-  html += "</ul>";
-  // Uploads into whichever folder is currently being viewed - "path" travels as a hidden field.
-  // The <input> allows selecting multiple files at once; handleUploadChunk()/handleUploadDone()
-  // on the device side only ever handle one file per POST, so the script below fires one
-  // sequential /upload request per selected file (concurrent requests would just queue up behind
-  // the same blocking transfer anyway - see handleSdDownload()'s comment on that tradeoff) and
-  // reloads the folder listing once every file has finished.
-  html += "<form id=\"uploadForm\" method=\"POST\" action=\"/upload\" enctype=\"multipart/form-data\">"
-          "<input type=\"hidden\" id=\"uploadPath\" name=\"path\" value=\"" + path + "\">"
-          "<input type=\"file\" name=\"file\" id=\"fileInput\" multiple required>"
-          "<input type=\"submit\" value=\"Upload\"></form>"
-          "<div id=\"uploadStatus\"></div>";
-  html += R"HTMLSCRIPT(<script>
-document.getElementById('uploadForm').addEventListener('submit', function (e) {
-  e.preventDefault();
-  var path = document.getElementById('uploadPath').value;
-  var files = document.getElementById('fileInput').files;
-  var statusEl = document.getElementById('uploadStatus');
-  var i = 0;
-  function next() {
-    if (i >= files.length) { location.reload(); return; }
-    var fd = new FormData();
-    fd.append('path', path);
-    fd.append('file', files[i]);
-    statusEl.textContent = 'Uploading ' + (i + 1) + ' of ' + files.length + ': ' + files[i].name;
-    fetch('/upload', { method: 'POST', body: fd })
-      .then(function (r) {
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        i++;
-        next();
-      })
-      .catch(function (err) {
-        statusEl.textContent = 'Upload failed on ' + files[i].name + ': ' + err;
-      });
-  }
-  next();
-});
-</script>)HTMLSCRIPT";
-  html += "</body></html>";
+  html += "</ul></body></html>";
   fileServer.send(200, "text/html", html);
 }
 
 // Blocks loop() (and therefore webSocket.loop()/drainTtsRing()) for as long as the transfer
-// takes, same tradeoff this codebase already accepts for sendAudioToBackend()/
+// takes, same tradeoff this codebase already accepts for recordUntilStop()/sendAudioToBackend()/
 // runWifiSetupPortal() - fine for occasional file grabs, but a large file will pause the voice
 // assistant (WS keepalive, TTS playback) until the download finishes.
 void handleSdDownload() {
@@ -1756,92 +1174,6 @@ void handleSdDownload() {
   fileServer.sendHeader("Content-Disposition", "attachment; filename=\"" + filename + "\"");
   fileServer.streamFile(file, "application/octet-stream");
   file.close();
-}
-
-// Sends the browser back to whatever folder listing it should land on after a play/next/stop
-// action, so hitting these buttons feels like a control on the same page rather than a navigation.
-void redirectToFolder(const String& folder) {
-  fileServer.sendHeader("Location", "/?path=" + folder, true);
-  fileServer.send(302, "text/plain", "");
-}
-
-File   uploadFile;
-String uploadPath;
-String uploadFolder;
-bool   uploadTooLarge   = false;
-bool   uploadWriteError = false;
-
-// Registered as the "ufn" (4th) arg of fileServer.on("/upload", ...) - WebServer calls this
-// repeatedly as multipart body chunks arrive, before the normal handler (handleUploadDone) runs
-// once at the very end. Writes straight to SD as each chunk arrives (rather than buffering the
-// whole file in RAM) so uploads aren't limited to whatever fits in heap/PSRAM; MAX_UPLOAD_BYTES
-// still bounds the worst-case time this blocks loop() (same blocking-transfer tradeoff already
-// accepted by handleSdDownload() above).
-void handleUploadChunk() {
-  HTTPUpload& upload = fileServer.upload();
-  if (upload.status == UPLOAD_FILE_START) {
-    uploadTooLarge   = false;
-    uploadWriteError = false;
-    uploadFolder = fileServer.hasArg("path") ? fileServer.arg("path") : "/";
-    uploadPath = uploadFolder + (uploadFolder.endsWith("/") ? "" : "/") + upload.filename;
-    if (uploadFile) uploadFile.close();
-    uploadFile = SD_MMC.open(uploadPath, FILE_WRITE);
-    if (!uploadFile) {
-      uploadWriteError = true;
-      Serial.printf("[upload] failed to open %s for writing\n", uploadPath.c_str());
-    } else {
-      Serial.printf("[upload] receiving %s\n", uploadPath.c_str());
-    }
-  } else if (upload.status == UPLOAD_FILE_WRITE) {
-    if (uploadTooLarge || uploadWriteError) return;
-    if (upload.totalSize + upload.currentSize > MAX_UPLOAD_BYTES) {
-      uploadTooLarge = true;
-      Serial.println("[upload] exceeded MAX_UPLOAD_BYTES - aborting");
-      return;
-    }
-    if (uploadFile) uploadFile.write(upload.buf, upload.currentSize);
-  } else if (upload.status == UPLOAD_FILE_END || upload.status == UPLOAD_FILE_ABORTED) {
-    if (uploadFile) uploadFile.close();
-    if (uploadTooLarge || uploadWriteError) {
-      SD_MMC.remove(uploadPath);   // discard the partial file rather than leaving a truncated one behind
-    } else {
-      Serial.printf("[upload] done, %u bytes -> %s\n", (unsigned)upload.totalSize, uploadPath.c_str());
-    }
-  }
-}
-
-// Runs once after handleUploadChunk() has processed every chunk - reports the outcome and sends
-// the browser back to the folder it uploaded into (or /, if this is somehow the very first page).
-void handleUploadDone() {
-  if (uploadTooLarge) {
-    fileServer.send(413, "text/plain", "File too large (max " + String(MAX_UPLOAD_BYTES / (1024 * 1024)) + " MB)");
-    return;
-  }
-  if (uploadWriteError) {
-    fileServer.send(500, "text/plain", "Failed to write file to SD card");
-    return;
-  }
-  redirectToFolder(uploadFolder.length() ? uploadFolder : "/");
-}
-
-void handleMusicPlay() {
-  if (!sdReady) { fileServer.send(503, "text/plain", "SD card not mounted"); return; }
-  if (!musicRing) { fileServer.send(503, "text/plain", "Music playback unavailable"); return; }
-  if (!fileServer.hasArg("path")) { fileServer.send(400, "text/plain", "Missing path parameter"); return; }
-  String path = fileServer.arg("path");
-  if (!isMp3(path)) { fileServer.send(400, "text/plain", "Not an MP3 file: " + path); return; }
-  playSongFile(path);
-  redirectToFolder(fileServer.hasArg("back") ? fileServer.arg("back") : dirnameOf(path));
-}
-
-void handleMusicNext() {
-  nextSong();
-  redirectToFolder(fileServer.hasArg("back") ? fileServer.arg("back") : "/");
-}
-
-void handleMusicStop() {
-  stopMusic();
-  redirectToFolder(fileServer.hasArg("back") ? fileServer.arg("back") : "/");
 }
 
 // Shown for a few seconds right after the file browser comes up, since Serial (where this URL
@@ -1880,15 +1212,110 @@ void initSdFileServer() {
 
   fileServer.on("/", HTTP_GET, handleSdRoot);
   fileServer.on("/download", HTTP_GET, handleSdDownload);
-  fileServer.on("/upload", HTTP_POST, handleUploadDone, handleUploadChunk);
-  fileServer.on("/play", HTTP_GET, handleMusicPlay);
-  fileServer.on("/next", HTTP_GET, handleMusicNext);
-  fileServer.on("/stop", HTTP_GET, handleMusicStop);
   fileServer.begin();
   String ip = WiFi.localIP().toString();
   Serial.printf("[SD] file browser up at http://%s:%d/ (sdReady=%s)\n",
                 ip.c_str(), SD_SERVER_PORT, sdReady ? "true" : "false");
   showSdServerScreen(ip);
+}
+
+// ---- Music playback (MP3 files on the SD card, voice-triggered via the "play_song"/"stop_song"
+// WS messages handled in webSocketEvent() above) --------------------------------------------
+// Reuses the exact I2S_speaker instance drainTtsRing() drives for TTS, reconfigured to the
+// song's own sample rate while playing - see loop()'s musicPlaying/waitingForReply gating, which
+// keeps this and TTS playback from ever running at the same time, so there's no contention over
+// the shared peripheral. ConsumeSample() batches decoded samples into a small stack buffer and
+// only calls I2S_speaker.write() once it's full (I2S has real per-call overhead - writing one
+// sample at a time would starve throughput), which is enough buffering here: unlike TTS's
+// network-fed ring buffer, an MP3 file decodes from the local SD card at whatever pace loop()
+// calls musicLoop(), so there's no separate producer/consumer split to manage.
+class I2SMusicOutput : public AudioOutput {
+ public:
+  bool begin() override { return true; }
+  bool stop() override { flush(); return true; }
+  bool SetRate(int hz) override {
+    AudioOutput::SetRate(hz);
+    I2S_speaker.end();
+    I2S_speaker.setPins(I2S_SPK_BCLK, I2S_SPK_LRC, I2S_SPK_DOUT, -1);
+    I2S_speaker.begin(I2S_MODE_STD, hz, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
+    return true;
+  }
+  bool ConsumeSample(int16_t sample[2]) override {
+    buf[fill * 2]     = sample[0];
+    buf[fill * 2 + 1] = sample[1];
+    fill++;
+    if (fill == kFrames) flush();
+    return true;
+  }
+ private:
+  static const size_t kFrames = 512;   // ~11.6ms at 44.1kHz - matches drainTtsRing()'s slice size
+  int16_t buf[kFrames * 2];
+  size_t  fill = 0;
+  void flush() {
+    if (fill == 0) return;
+    I2S_speaker.write((uint8_t*)buf, fill * 4);
+    fill = 0;
+  }
+};
+
+AudioFileSourceFS*  mp3Source  = nullptr;
+AudioGeneratorMP3*  mp3Decoder = nullptr;
+I2SMusicOutput*     mp3Output  = nullptr;
+
+bool isMp3(const String& name) {
+  String lower = name;
+  lower.toLowerCase();
+  return lower.endsWith(".mp3");
+}
+
+// Back to TTS's fixed sample rate once a song finishes/stops - mirrors I2SMusicOutput::SetRate()
+// above, just restoring the other side of the same speaker instance.
+void restoreSpeakerForTts() {
+  I2S_speaker.end();
+  I2S_speaker.setPins(I2S_SPK_BCLK, I2S_SPK_LRC, I2S_SPK_DOUT, -1);
+  I2S_speaker.begin(I2S_MODE_STD, TTS_SAMPLE_RATE_HZ, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
+}
+
+void stopMusic() {
+  if (!musicPlaying) return;
+  if (mp3Decoder) { mp3Decoder->stop(); delete mp3Decoder; mp3Decoder = nullptr; }
+  if (mp3Source)  { mp3Source->close(); delete mp3Source;  mp3Source  = nullptr; }
+  musicPlaying = false;
+  restoreSpeakerForTts();
+  updateDisplay(STATE_IDLE);
+  Serial.println("[music] stopped");
+}
+
+void playSongFile(const String& path, const String& title) {
+  if (!sdReady) { Serial.println("[music] SD card not ready - can't play"); return; }
+  if (musicPlaying) stopMusic();
+
+  mp3Source = new AudioFileSourceFS(SD_MMC, path.c_str());
+  if (!mp3Output) mp3Output = new I2SMusicOutput();
+  mp3Decoder = new AudioGeneratorMP3();
+  if (!mp3Decoder->begin(mp3Source, mp3Output)) {
+    Serial.printf("[music] failed to start %s\n", path.c_str());
+    delete mp3Decoder; mp3Decoder = nullptr;
+    delete mp3Source;  mp3Source  = nullptr;
+    return;
+  }
+  g_currentTrackName = title.length() ? title : path.substring(path.lastIndexOf('/') + 1);
+  musicPlaying = true;
+  Serial.printf("[music] playing %s (%s)\n", g_currentTrackName.c_str(), path.c_str());
+  updateDisplay(STATE_MUSIC, g_currentTrackName.c_str());
+}
+
+// Called once per loop() iteration while musicPlaying, mirroring drainTtsRing()'s role for TTS.
+void musicLoop() {
+  if (!mp3Decoder || !mp3Decoder->isRunning()) {
+    stopMusic();
+    return;
+  }
+  if (!mp3Decoder->loop()) {
+    mp3Decoder->stop();   // track finished (or hit a decode error)
+    Serial.println("[music] finished");
+    stopMusic();
+  }
 }
 
 void setup() {
@@ -1904,9 +1331,6 @@ void setup() {
 
   ttsRing = (uint8_t*) ps_malloc(TTS_RING_BYTES);
   if (!ttsRing) { Serial.println("FATAL: ps_malloc (tts ring) failed"); while (true) delay(1000); }
-
-  musicRing = (uint8_t*) ps_malloc(MUSIC_RING_BYTES);
-  if (!musicRing) Serial.println("WARNING: ps_malloc (music ring) failed - song playback disabled");
 
   displayInit();   // early, so mic/WiFi init failures below can still show an error icon
   g_vpsHost = loadVpsHost();   // before any possible runWifiSetupPortal() call below, which shows it
@@ -1974,13 +1398,11 @@ void setup() {
 
 void loop() {
   webSocket.loop();   // must run every cycle to process the socket and keep it alive
-  fileServer.handleClient();   // SD file browser + music controls - returns immediately if no client is connected
-
+  fileServer.handleClient();   // SD file browser - returns immediately if no client is connected
   if (musicPlaying) {
-    if (radioPlaying) radioLoop();   // internet radio - ESP32-audioI2S engine, see playRadioUrl()
-    else musicLoop();                // local SD file - ESP8266Audio engine, paces this loop() the same way drainTtsRing() does for TTS
+    musicLoop();      // pump the MP3 decoder / feed I2S_speaker one batch at a time
   } else {
-    drainTtsRing();     // play back one small (~21ms) slice of buffered TTS audio, if any is queued
+    drainTtsRing();   // play back one small (~21ms) slice of buffered TTS audio, if any is queued
     if (pendingSpeakingDisplay) {
       // Deferred so the ~20-25ms SSD1306 I2C flush inside updateDisplay() doesn't starve I2S at
       // the exact moment we transition silence -> real audio; drainTtsRing() has already written
@@ -2026,16 +1448,6 @@ void loop() {
     runWifiSetupPortal();   // never returns - saving credentials triggers ESP.restart()
   }
 
-  if (musicPlaying) {
-    // A tap here means "stop the music and listen instead" - stop it and fall through into the
-    // same tap-to-record flow idle uses below, reusing this same tap rather than requiring a second one.
-    if (!tapped) {
-      return;   // musicLoop() above already paces this iteration via drainMusicRing()'s I2S_speaker.write()
-    }
-    Serial.println("[touch] stopping music to listen");
-    stopMusic();
-  }
-
   if (g_state == STATE_ERROR && g_errorKind == ERR_WIFI && tapped) {
     Serial.println("[WiFi] retry requested via touch");
     if (connectWifi(g_wifiSsid.c_str(), g_wifiPass.c_str(), 15000)) {
@@ -2058,11 +1470,6 @@ void loop() {
       return;   // drainTtsRing() above already paces this loop at ~21ms/iteration via its I2S write
     }
     Serial.println("[touch] barge-in - stopping playback to listen again");
-    // Tells the backend to actually abort the in-flight turn (STT/LLM/still-streaming, real-time-
-    // paced TTS) instead of dutifully finishing it before it can look at anything we send next -
-    // without this, the server has no idea we've stopped listening and our next request sits
-    // queued behind however long the abandoned reply had left to run.
-    webSocket.sendTXT("{\"type\":\"interrupt\"}");
     ttsHead = ttsTail = ttsFill = 0;
     ignoreIncomingAudio = true;   // discard the interrupted turn's remaining bytes (see flag comment above)
     waitingForReply = false;
@@ -2073,17 +1480,24 @@ void loop() {
     pendingSpeakingDisplay = false;
   }
 
-  if (listening) {
-    // A touch here cancels the listen and returns to Idle without sending - per the target flow,
-    // sending is driven entirely by VAD (2s trailing silence), not by a second tap.
-    if (tapped) {
-      listening = false;
-      Serial.println("[touch] cancelled listening, back to idle");
-      updateDisplay(STATE_IDLE);
-      return;
+  if (musicPlaying) {
+    // Same one-tap-does-both convention as the barge-in block above: a touch stops the song and
+    // falls straight through to start a fresh recording, no second tap needed.
+    if (!tapped) {
+      return;   // musicLoop() above already paces this iteration via its blocking I2S write
     }
-    vadListenTick();   // paces this iteration via I2S_mic.readBytes()/feedSilentSlice()
-    return;
+    Serial.println("[touch] stopping song to listen");
+    stopMusic();
+  }
+
+  // A queued play_song (see webSocketEvent()'s "play_song" handler) starts as soon as this
+  // device is free to play it - not gated on `tapped`, since starting playback isn't a touch
+  // gesture. By this point in loop(), waitingForReply/musicPlaying already reflect anything
+  // drainTtsRing()/the barge-in block above just changed this same iteration.
+  if (g_songPending && !waitingForReply && !musicPlaying) {
+    g_songPending = false;
+    playSongFile(g_pendingSongPath, g_pendingSongTitle);
+    return;   // don't also fall through into a tap-triggered recording this same iteration
   }
 
   if (!tapped) {
@@ -2095,6 +1509,11 @@ void loop() {
     return;
   }
 
-  Serial.println(">>> tap - waking up & listening <<<");
-  startListening();
+  Serial.println(">>> tap - waking up & listening (tap again to stop) <<<");
+  playWakeAnimation();
+  updateDisplay(STATE_RECORDING);
+  recordUntilStop();
+  Serial.println("<<< second tap - thinking >>>");
+  updateDisplay(STATE_PROCESSING);
+  sendAudioToBackend();
 }

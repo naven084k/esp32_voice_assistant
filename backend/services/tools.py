@@ -24,6 +24,88 @@ async def web_search(query: str) -> str:
 
 
 @tool
+async def play_radio(station: str) -> str:
+    """Use when the user asks to play an internet radio station - e.g. 'play radio 98.3 FM',
+    'tune in to Radio Mirchi', 'play some FM radio', 'play Big FM', 'play AP9 FM', 'play Melody
+    Radio', 'play station 3'. `station` should be the station name/frequency/number exactly as the
+    user said it - a handful of known-good stations (AP9 FM, Melody Radio, Asura Radio, Mahi Radio,
+    All India Radio, RadioBoss Stream 33, referenceable by name or by 1-based station number) are
+    checked first; anything else falls back to a live web search."""
+    from services.llm import current_thread_id, queue_device_action
+    from services.radio import search_station
+
+    result = await search_station(station)
+    if not result:
+        return f"Couldn't find a radio station matching '{station}'."
+    queue_device_action(current_thread_id.get(), {
+        "type": "radio", "url": result["url"], "name": result["name"],
+    })
+    return f"Playing {result['name']} now."
+
+
+@tool
+def stop_radio(query: str = "") -> str:
+    """Use when the user asks to stop the radio or turn off the internet radio that's playing."""
+    from services.llm import current_thread_id, queue_device_action
+    queue_device_action(current_thread_id.get(), {"type": "stop_radio"})
+    return "Stopped the radio."
+
+
+@tool
+async def download_song(song: str) -> str:
+    """Use when the user asks to play a specific song/track (not a radio station) - e.g.
+    'play Tum Hi Ho', 'download and play <song> by <artist>'. Searches for a direct playable
+    audio file link and, if found, queues a device download+play action. Best-effort only -
+    most mainstream/copyrighted songs won't have a freely hosted direct .mp3/.wav link, so this
+    will often fail; tell the user plainly if it does."""
+    from services.llm import current_thread_id, queue_device_action
+
+    client = AsyncTavilyClient(api_key=os.environ["TAVILY_API_KEY"])
+    response = await client.search(f"{song} song mp3 direct download link", max_results=5)
+    results = response.get("results", [])
+    audio_url = None
+    title = song
+    for r in results:
+        url = r.get("url", "")
+        if url.lower().split("?")[0].endswith((".mp3", ".wav")):
+            audio_url = url
+            title = r.get("title") or song
+            break
+    if not audio_url:
+        return f"Couldn't find a direct playable audio link for '{song}'."
+    queue_device_action(current_thread_id.get(), {
+        "type": "download_song", "url": audio_url, "title": title,
+    })
+    return f"Downloading and playing {title} now."
+
+
+@tool
+async def play_song(song: str) -> str:
+    """Use when the user asks to play a specific song, or a mood/genre/language match, from the
+    local music library - e.g. 'play O Rangula Chilaka', 'play something romantic', 'play a telugu
+    melody song'. Prefer this over download_song - only fall back to download_song if this returns
+    no match and the user still wants that specific track."""
+    from services.llm import current_thread_id, queue_device_action
+    from services.song_index import find_song
+
+    result = find_song(song)
+    if not result:
+        return f"Couldn't find '{song}' in the music library."
+    queue_device_action(current_thread_id.get(), {
+        "type": "play_song", "path": result["path"], "title": result["title"],
+    })
+    return f"Playing {result['title']} now."
+
+
+@tool
+def stop_song(query: str = "") -> str:
+    """Use when the user asks to stop the song that's currently playing from the local music library."""
+    from services.llm import current_thread_id, queue_device_action
+    queue_device_action(current_thread_id.get(), {"type": "stop_song"})
+    return "Stopped the song."
+
+
+@tool
 async def run_in_background(task: str) -> str:
     """Use this when the user asks you to do something in the background, offline, or later —
     e.g. 'search for X and send me the results', 'do this in the background', 'let me know later'.
@@ -51,6 +133,11 @@ def build_tools():
         get_current_datetime,
         run_in_background,
         web_search,
+        play_radio,
+        stop_radio,
+        download_song,
+        play_song,
+        stop_song,
         calculate,
         convert_units,
         convert_temperature,

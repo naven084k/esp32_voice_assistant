@@ -1,0 +1,3492 @@
+{
+  "version": "3.0",
+  "count": 96,
+  "songs": [
+    {
+      "id": "singles_o_rangula_chilaka",
+      "title": "O Rangula Chilaka",
+      "album": "Singles",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "romantic",
+        "feel-good"
+      ],
+      "themes": [
+        "love"
+      ],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Singles. Suitable for romantic, feel-good listening.",
+      "keywords": [
+        "chilaka",
+        "feel",
+        "good",
+        "love",
+        "o",
+        "rangula",
+        "romantic",
+        "singles"
+      ],
+      "voice_aliases": [
+        "play O Rangula Chilaka",
+        "play Singles song",
+        "play romantic song",
+        "play telugu romantic music",
+        "play o rangula chilaka",
+        "i want O Rangula Chilaka",
+        "start O Rangula Chilaka"
+      ]
+    },
+    {
+      "id": "a_aa_2016_01_yaa_yaa",
+      "title": "01 - Yaa Yaa",
+      "album": "A Aa - (2016)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from A Aa - (2016). Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "01",
+        "a",
+        "aa",
+        "melody",
+        "yaa"
+      ],
+      "voice_aliases": [
+        "play 01 - Yaa Yaa",
+        "play A Aa - (2016) song",
+        "play melody song",
+        "play telugu melody music",
+        "play 01 - yaa yaa",
+        "i want 01 - Yaa Yaa",
+        "start 01 - Yaa Yaa"
+      ]
+    },
+    {
+      "id": "a_aa_2016_02_rang_de",
+      "title": "02 - Rang De",
+      "album": "A Aa - (2016)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "romantic",
+        "feel-good"
+      ],
+      "themes": [
+        "love"
+      ],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from A Aa - (2016). Suitable for romantic, feel-good listening.",
+      "keywords": [
+        "(2016)",
+        "02",
+        "a",
+        "aa",
+        "de",
+        "feel",
+        "good",
+        "love",
+        "rang",
+        "romantic"
+      ],
+      "voice_aliases": [
+        "play 02 - Rang De",
+        "play A Aa - (2016) song",
+        "play romantic song",
+        "play telugu romantic music",
+        "play 02 - rang de",
+        "i want 02 - Rang De",
+        "start 02 - Rang De"
+      ]
+    },
+    {
+      "id": "a_aa_2016_03_anasuya_kosam",
+      "title": "03 - Anasuya Kosam",
+      "album": "A Aa - (2016)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from A Aa - (2016). Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "03",
+        "a",
+        "aa",
+        "anasuya",
+        "kosam",
+        "melody"
+      ],
+      "voice_aliases": [
+        "play 03 - Anasuya Kosam",
+        "play A Aa - (2016) song",
+        "play melody song",
+        "play telugu melody music",
+        "play 03 - anasuya kosam",
+        "i want 03 - Anasuya Kosam",
+        "start 03 - Anasuya Kosam"
+      ]
+    },
+    {
+      "id": "a_aa_2016_04_mummy_returns",
+      "title": "04 - Mummy Returns",
+      "album": "A Aa - (2016)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from A Aa - (2016). Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "04",
+        "a",
+        "aa",
+        "melody",
+        "mummy",
+        "returns"
+      ],
+      "voice_aliases": [
+        "play 04 - Mummy Returns",
+        "play A Aa - (2016) song",
+        "play melody song",
+        "play telugu melody music",
+        "play 04 - mummy returns",
+        "i want 04 - Mummy Returns",
+        "start 04 - Mummy Returns"
+      ]
+    },
+    {
+      "id": "a_aa_2016_05_yellipoke_shyamala",
+      "title": "05 - Yellipoke Shyamala",
+      "album": "A Aa - (2016)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from A Aa - (2016). Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "05",
+        "a",
+        "aa",
+        "melody",
+        "shyamala",
+        "yellipoke"
+      ],
+      "voice_aliases": [
+        "play 05 - Yellipoke Shyamala",
+        "play A Aa - (2016) song",
+        "play melody song",
+        "play telugu melody music",
+        "play 05 - yellipoke shyamala",
+        "i want 05 - Yellipoke Shyamala",
+        "start 05 - Yellipoke Shyamala"
+      ]
+    },
+    {
+      "id": "bichagadu_2016_320kbps_glamour",
+      "title": "Glamour",
+      "album": "Bichagadu (2016) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Bichagadu (2016) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "bichagadu",
+        "glamour",
+        "melody",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Glamour",
+        "play Bichagadu (2016) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play glamour",
+        "i want Glamour",
+        "start Glamour"
+      ]
+    },
+    {
+      "id": "bichagadu_2016_320kbps_vandha_devulle",
+      "title": "Vandha Devulle",
+      "album": "Bichagadu (2016) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Bichagadu (2016) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "bichagadu",
+        "devulle",
+        "melody",
+        "vandha",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Vandha Devulle",
+        "play Bichagadu (2016) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play vandha devulle",
+        "i want Vandha Devulle",
+        "start Vandha Devulle"
+      ]
+    },
+    {
+      "id": "bichagadu_2016_320kbps_tingarabuchi",
+      "title": "Tingarabuchi",
+      "album": "Bichagadu (2016) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Bichagadu (2016) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "bichagadu",
+        "melody",
+        "tingarabuchi",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Tingarabuchi",
+        "play Bichagadu (2016) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play tingarabuchi",
+        "i want Tingarabuchi",
+        "start Tingarabuchi"
+      ]
+    },
+    {
+      "id": "bichagadu_2016_320kbps_neekosam_vastha",
+      "title": "Neekosam Vastha",
+      "album": "Bichagadu (2016) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Bichagadu (2016) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "bichagadu",
+        "melody",
+        "neekosam",
+        "vastha",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Neekosam Vastha",
+        "play Bichagadu (2016) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play neekosam vastha",
+        "i want Neekosam Vastha",
+        "start Neekosam Vastha"
+      ]
+    },
+    {
+      "id": "bichagadu_2016_320kbps_okka_puta_annam",
+      "title": "Okka Puta Annam",
+      "album": "Bichagadu (2016) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Bichagadu (2016) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "annam",
+        "bichagadu",
+        "melody",
+        "okka",
+        "puta",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Okka Puta Annam",
+        "play Bichagadu (2016) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play okka puta annam",
+        "i want Okka Puta Annam",
+        "start Okka Puta Annam"
+      ]
+    },
+    {
+      "id": "bichagadu_2016_320kbps_bichagadu_theme",
+      "title": "Bichagadu Theme",
+      "album": "Bichagadu (2016) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "dramatic"
+      ],
+      "themes": [
+        "emotion"
+      ],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Bichagadu (2016) ~320Kbps. Suitable for dramatic listening.",
+      "keywords": [
+        "(2016)",
+        "bichagadu",
+        "dramatic",
+        "emotion",
+        "theme",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Bichagadu Theme",
+        "play Bichagadu (2016) ~320Kbps song",
+        "play dramatic song",
+        "play telugu dramatic music",
+        "play bichagadu theme",
+        "i want Bichagadu Theme",
+        "start Bichagadu Theme"
+      ]
+    },
+    {
+      "id": "bichagadu_2016_320kbps_title_track_dhurandhar_320_kbps",
+      "title": "Title Track Dhurandhar 320 Kbps",
+      "album": "Bichagadu (2016) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Bichagadu (2016) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "320",
+        "bichagadu",
+        "dhurandhar",
+        "kbps",
+        "melody",
+        "title",
+        "track",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Title Track Dhurandhar 320 Kbps",
+        "play Bichagadu (2016) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play title track dhurandhar 320 kbps",
+        "i want Title Track Dhurandhar 320 Kbps",
+        "start Title Track Dhurandhar 320 Kbps"
+      ]
+    },
+    {
+      "id": "dhruva_2016_320kbps_dhruva_dhruva",
+      "title": "Dhruva Dhruva",
+      "album": "Dhruva (2016) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Dhruva (2016) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "dhruva",
+        "melody",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Dhruva Dhruva",
+        "play Dhruva (2016) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play dhruva dhruva",
+        "i want Dhruva Dhruva",
+        "start Dhruva Dhruva"
+      ]
+    },
+    {
+      "id": "dhruva_2016_320kbps_choosa_choosa",
+      "title": "Choosa Choosa",
+      "album": "Dhruva (2016) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Dhruva (2016) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "choosa",
+        "dhruva",
+        "melody",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Choosa Choosa",
+        "play Dhruva (2016) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play choosa choosa",
+        "i want Choosa Choosa",
+        "start Choosa Choosa"
+      ]
+    },
+    {
+      "id": "dhruva_2016_320kbps_pareshanura",
+      "title": "Pareshanura",
+      "album": "Dhruva (2016) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Dhruva (2016) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "dhruva",
+        "melody",
+        "pareshanura",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Pareshanura",
+        "play Dhruva (2016) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play pareshanura",
+        "i want Pareshanura",
+        "start Pareshanura"
+      ]
+    },
+    {
+      "id": "dhruva_2016_320kbps_neethoney_dance",
+      "title": "Neethoney Dance",
+      "album": "Dhruva (2016) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "energetic",
+        "dance"
+      ],
+      "themes": [
+        "celebration"
+      ],
+      "energy": "high",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Dhruva (2016) ~320Kbps. Suitable for energetic, dance listening.",
+      "keywords": [
+        "(2016)",
+        "celebration",
+        "dance",
+        "dhruva",
+        "energetic",
+        "neethoney",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Neethoney Dance",
+        "play Dhruva (2016) ~320Kbps song",
+        "play energetic song",
+        "play telugu energetic music",
+        "play neethoney dance",
+        "i want Neethoney Dance",
+        "start Neethoney Dance"
+      ]
+    },
+    {
+      "id": "ekkadiki_pothavu_chinnavada_2016_320kbps_chirunama_thana_chirunama",
+      "title": "Chirunama Thana Chirunama",
+      "album": "Ekkadiki Pothavu Chinnavada (2016) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Ekkadiki Pothavu Chinnavada (2016) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "chinnavada",
+        "chirunama",
+        "ekkadiki",
+        "melody",
+        "pothavu",
+        "thana",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Chirunama Thana Chirunama",
+        "play Ekkadiki Pothavu Chinnavada (2016) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play chirunama thana chirunama",
+        "i want Chirunama Thana Chirunama",
+        "start Chirunama Thana Chirunama"
+      ]
+    },
+    {
+      "id": "ekkadiki_pothavu_chinnavada_2016_320kbps_vandha_speedulo",
+      "title": "Vandha Speedulo",
+      "album": "Ekkadiki Pothavu Chinnavada (2016) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Ekkadiki Pothavu Chinnavada (2016) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "chinnavada",
+        "ekkadiki",
+        "melody",
+        "pothavu",
+        "speedulo",
+        "vandha",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Vandha Speedulo",
+        "play Ekkadiki Pothavu Chinnavada (2016) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play vandha speedulo",
+        "i want Vandha Speedulo",
+        "start Vandha Speedulo"
+      ]
+    },
+    {
+      "id": "ekkadiki_pothavu_chinnavada_2016_320kbps_neetho_unte_chalu",
+      "title": "Neetho Unte Chalu",
+      "album": "Ekkadiki Pothavu Chinnavada (2016) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Ekkadiki Pothavu Chinnavada (2016) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "chalu",
+        "chinnavada",
+        "ekkadiki",
+        "melody",
+        "neetho",
+        "pothavu",
+        "unte",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Neetho Unte Chalu",
+        "play Ekkadiki Pothavu Chinnavada (2016) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play neetho unte chalu",
+        "i want Neetho Unte Chalu",
+        "start Neetho Unte Chalu"
+      ]
+    },
+    {
+      "id": "ekkadiki_pothavu_chinnavada_2016_320kbps_masthundhi_life",
+      "title": "Masthundhi Life",
+      "album": "Ekkadiki Pothavu Chinnavada (2016) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Ekkadiki Pothavu Chinnavada (2016) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "chinnavada",
+        "ekkadiki",
+        "life",
+        "masthundhi",
+        "melody",
+        "pothavu",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Masthundhi Life",
+        "play Ekkadiki Pothavu Chinnavada (2016) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play masthundhi life",
+        "i want Masthundhi Life",
+        "start Masthundhi Life"
+      ]
+    },
+    {
+      "id": "express_raja_2015_01_hulala",
+      "title": "01 - Hulala",
+      "album": "Express Raja - (2015)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Express Raja - (2015). Suitable for melody listening.",
+      "keywords": [
+        "(2015)",
+        "01",
+        "express",
+        "hulala",
+        "melody",
+        "raja"
+      ],
+      "voice_aliases": [
+        "play 01 - Hulala",
+        "play Express Raja - (2015) song",
+        "play melody song",
+        "play telugu melody music",
+        "play 01 - hulala",
+        "i want 01 - Hulala",
+        "start 01 - Hulala"
+      ]
+    },
+    {
+      "id": "express_raja_2015_02_colorful_chilaka",
+      "title": "02 - Colorful Chilaka",
+      "album": "Express Raja - (2015)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "romantic",
+        "feel-good"
+      ],
+      "themes": [
+        "love"
+      ],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Express Raja - (2015). Suitable for romantic, feel-good listening.",
+      "keywords": [
+        "(2015)",
+        "02",
+        "chilaka",
+        "colorful",
+        "express",
+        "feel",
+        "good",
+        "love",
+        "raja",
+        "romantic"
+      ],
+      "voice_aliases": [
+        "play 02 - Colorful Chilaka",
+        "play Express Raja - (2015) song",
+        "play romantic song",
+        "play telugu romantic music",
+        "play 02 - colorful chilaka",
+        "i want 02 - Colorful Chilaka",
+        "start 02 - Colorful Chilaka"
+      ]
+    },
+    {
+      "id": "express_raja_2015_03_ee_vintha_needhiga",
+      "title": "03 - Ee Vintha Needhiga",
+      "album": "Express Raja - (2015)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Express Raja - (2015). Suitable for melody listening.",
+      "keywords": [
+        "(2015)",
+        "03",
+        "ee",
+        "express",
+        "melody",
+        "needhiga",
+        "raja",
+        "vintha"
+      ],
+      "voice_aliases": [
+        "play 03 - Ee Vintha Needhiga",
+        "play Express Raja - (2015) song",
+        "play melody song",
+        "play telugu melody music",
+        "play 03 - ee vintha needhiga",
+        "i want 03 - Ee Vintha Needhiga",
+        "start 03 - Ee Vintha Needhiga"
+      ]
+    },
+    {
+      "id": "express_raja_2015_04_247_party",
+      "title": "04 - 247 Party",
+      "album": "Express Raja - (2015)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "energetic",
+        "dance"
+      ],
+      "themes": [
+        "celebration"
+      ],
+      "energy": "high",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Express Raja - (2015). Suitable for energetic, dance listening.",
+      "keywords": [
+        "(2015)",
+        "04",
+        "247",
+        "celebration",
+        "dance",
+        "energetic",
+        "express",
+        "party",
+        "raja"
+      ],
+      "voice_aliases": [
+        "play 04 - 247 Party",
+        "play Express Raja - (2015) song",
+        "play energetic song",
+        "play telugu energetic music",
+        "play 04 - 247 party",
+        "i want 04 - 247 Party",
+        "start 04 - 247 Party"
+      ]
+    },
+    {
+      "id": "i_manoharudu_2014_320kbps_pareshanayya",
+      "title": "Pareshanayya",
+      "album": "I (Manoharudu) (2014) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from I (Manoharudu) (2014) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2014)",
+        "(manoharudu)",
+        "i",
+        "melody",
+        "pareshanayya",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Pareshanayya",
+        "play I (Manoharudu) (2014) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play pareshanayya",
+        "i want Pareshanayya",
+        "start Pareshanayya"
+      ]
+    },
+    {
+      "id": "i_manoharudu_2014_320kbps_nuvvunte_naa_jathagaa",
+      "title": "Nuvvunte Naa Jathagaa",
+      "album": "I (Manoharudu) (2014) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "romantic",
+        "feel-good"
+      ],
+      "themes": [
+        "love"
+      ],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from I (Manoharudu) (2014) ~320Kbps. Suitable for romantic, feel-good listening.",
+      "keywords": [
+        "(2014)",
+        "(manoharudu)",
+        "feel",
+        "good",
+        "i",
+        "jathagaa",
+        "love",
+        "naa",
+        "nuvvunte",
+        "romantic",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Nuvvunte Naa Jathagaa",
+        "play I (Manoharudu) (2014) ~320Kbps song",
+        "play romantic song",
+        "play telugu romantic music",
+        "play nuvvunte naa jathagaa",
+        "i want Nuvvunte Naa Jathagaa",
+        "start Nuvvunte Naa Jathagaa"
+      ]
+    },
+    {
+      "id": "i_manoharudu_2014_320kbps_ladiyo",
+      "title": "Ladiyo",
+      "album": "I (Manoharudu) (2014) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from I (Manoharudu) (2014) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2014)",
+        "(manoharudu)",
+        "i",
+        "ladiyo",
+        "melody",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Ladiyo",
+        "play I (Manoharudu) (2014) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play ladiyo",
+        "i want Ladiyo",
+        "start Ladiyo"
+      ]
+    },
+    {
+      "id": "i_manoharudu_2014_320kbps_poolane_kunukeyamantaa",
+      "title": "Poolane Kunukeyamantaa",
+      "album": "I (Manoharudu) (2014) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from I (Manoharudu) (2014) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2014)",
+        "(manoharudu)",
+        "i",
+        "kunukeyamantaa",
+        "melody",
+        "poolane",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Poolane Kunukeyamantaa",
+        "play I (Manoharudu) (2014) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play poolane kunukeyamantaa",
+        "i want Poolane Kunukeyamantaa",
+        "start Poolane Kunukeyamantaa"
+      ]
+    },
+    {
+      "id": "i_manoharudu_2014_320kbps_ayila_ayila",
+      "title": "Ayila Ayila",
+      "album": "I (Manoharudu) (2014) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from I (Manoharudu) (2014) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2014)",
+        "(manoharudu)",
+        "ayila",
+        "i",
+        "melody",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Ayila Ayila",
+        "play I (Manoharudu) (2014) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play ayila ayila",
+        "i want Ayila Ayila",
+        "start Ayila Ayila"
+      ]
+    },
+    {
+      "id": "i_manoharudu_2014_320kbps_nuvvunte_naa_jathagaa",
+      "title": "Nuvvunte Naa Jathagaa",
+      "album": "I (Manoharudu) (2014) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "romantic",
+        "feel-good"
+      ],
+      "themes": [
+        "love"
+      ],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from I (Manoharudu) (2014) ~320Kbps. Suitable for romantic, feel-good listening.",
+      "keywords": [
+        "(2014)",
+        "(manoharudu)",
+        "feel",
+        "good",
+        "i",
+        "jathagaa",
+        "love",
+        "naa",
+        "nuvvunte",
+        "romantic",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Nuvvunte Naa Jathagaa",
+        "play I (Manoharudu) (2014) ~320Kbps song",
+        "play romantic song",
+        "play telugu romantic music",
+        "play nuvvunte naa jathagaa",
+        "i want Nuvvunte Naa Jathagaa",
+        "start Nuvvunte Naa Jathagaa"
+      ]
+    },
+    {
+      "id": "i_manoharudu_2014_320kbps_pareshanayya",
+      "title": "Pareshanayya",
+      "album": "I (Manoharudu) (2014) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from I (Manoharudu) (2014) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2014)",
+        "(manoharudu)",
+        "i",
+        "melody",
+        "pareshanayya",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Pareshanayya",
+        "play I (Manoharudu) (2014) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play pareshanayya",
+        "i want Pareshanayya",
+        "start Pareshanayya"
+      ]
+    },
+    {
+      "id": "inkokkadu_2016_320kbps_chilaka_o_chilaka",
+      "title": "Chilaka O Chilaka",
+      "album": "Inkokkadu (2016) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "romantic",
+        "feel-good"
+      ],
+      "themes": [
+        "love"
+      ],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Inkokkadu (2016) ~320Kbps. Suitable for romantic, feel-good listening.",
+      "keywords": [
+        "(2016)",
+        "chilaka",
+        "feel",
+        "good",
+        "inkokkadu",
+        "love",
+        "o",
+        "romantic",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Chilaka O Chilaka",
+        "play Inkokkadu (2016) ~320Kbps song",
+        "play romantic song",
+        "play telugu romantic music",
+        "play chilaka o chilaka",
+        "i want Chilaka O Chilaka",
+        "start Chilaka O Chilaka"
+      ]
+    },
+    {
+      "id": "inkokkadu_2016_320kbps_iragadeesey_inuparaddu",
+      "title": "Iragadeesey Inuparaddu",
+      "album": "Inkokkadu (2016) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Inkokkadu (2016) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "inkokkadu",
+        "inuparaddu",
+        "iragadeesey",
+        "melody",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Iragadeesey Inuparaddu",
+        "play Inkokkadu (2016) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play iragadeesey inuparaddu",
+        "i want Iragadeesey Inuparaddu",
+        "start Iragadeesey Inuparaddu"
+      ]
+    },
+    {
+      "id": "nannaku_prematho_2015_01_follow_follow",
+      "title": "01 - Follow Follow",
+      "album": "Nannaku Prematho - (2015)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Nannaku Prematho - (2015). Suitable for melody listening.",
+      "keywords": [
+        "(2015)",
+        "01",
+        "follow",
+        "melody",
+        "nannaku",
+        "prematho"
+      ],
+      "voice_aliases": [
+        "play 01 - Follow Follow",
+        "play Nannaku Prematho - (2015) song",
+        "play melody song",
+        "play telugu melody music",
+        "play 01 - follow follow",
+        "i want 01 - Follow Follow",
+        "start 01 - Follow Follow"
+      ]
+    },
+    {
+      "id": "nannaku_prematho_2015_02_na_manasu_neelo",
+      "title": "02 - Na Manasu Neelo",
+      "album": "Nannaku Prematho - (2015)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "romantic",
+        "feel-good"
+      ],
+      "themes": [
+        "love"
+      ],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Nannaku Prematho - (2015). Suitable for romantic, feel-good listening.",
+      "keywords": [
+        "(2015)",
+        "02",
+        "feel",
+        "good",
+        "love",
+        "manasu",
+        "na",
+        "nannaku",
+        "neelo",
+        "prematho",
+        "romantic"
+      ],
+      "voice_aliases": [
+        "play 02 - Na Manasu Neelo",
+        "play Nannaku Prematho - (2015) song",
+        "play romantic song",
+        "play telugu romantic music",
+        "play 02 - na manasu neelo",
+        "i want 02 - Na Manasu Neelo",
+        "start 02 - Na Manasu Neelo"
+      ]
+    },
+    {
+      "id": "nannaku_prematho_2015_03_dont_stop",
+      "title": "03 - Dont Stop",
+      "album": "Nannaku Prematho - (2015)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Nannaku Prematho - (2015). Suitable for melody listening.",
+      "keywords": [
+        "(2015)",
+        "03",
+        "dont",
+        "melody",
+        "nannaku",
+        "prematho",
+        "stop"
+      ],
+      "voice_aliases": [
+        "play 03 - Dont Stop",
+        "play Nannaku Prematho - (2015) song",
+        "play melody song",
+        "play telugu melody music",
+        "play 03 - dont stop",
+        "i want 03 - Dont Stop",
+        "start 03 - Dont Stop"
+      ]
+    },
+    {
+      "id": "nannaku_prematho_2015_04_love_me_again",
+      "title": "04 - Love Me Again",
+      "album": "Nannaku Prematho - (2015)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "romantic",
+        "feel-good"
+      ],
+      "themes": [
+        "love"
+      ],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Nannaku Prematho - (2015). Suitable for romantic, feel-good listening.",
+      "keywords": [
+        "(2015)",
+        "04",
+        "again",
+        "feel",
+        "good",
+        "love",
+        "me",
+        "nannaku",
+        "prematho",
+        "romantic"
+      ],
+      "voice_aliases": [
+        "play 04 - Love Me Again",
+        "play Nannaku Prematho - (2015) song",
+        "play romantic song",
+        "play telugu romantic music",
+        "play 04 - love me again",
+        "i want 04 - Love Me Again",
+        "start 04 - Love Me Again"
+      ]
+    },
+    {
+      "id": "nannaku_prematho_2015_05_love_dhebba",
+      "title": "05 - Love Dhebba",
+      "album": "Nannaku Prematho - (2015)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "romantic",
+        "feel-good"
+      ],
+      "themes": [
+        "love"
+      ],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Nannaku Prematho - (2015). Suitable for romantic, feel-good listening.",
+      "keywords": [
+        "(2015)",
+        "05",
+        "dhebba",
+        "feel",
+        "good",
+        "love",
+        "nannaku",
+        "prematho",
+        "romantic"
+      ],
+      "voice_aliases": [
+        "play 05 - Love Dhebba",
+        "play Nannaku Prematho - (2015) song",
+        "play romantic song",
+        "play telugu romantic music",
+        "play 05 - love dhebba",
+        "i want 05 - Love Dhebba",
+        "start 05 - Love Dhebba"
+      ]
+    },
+    {
+      "id": "nannaku_prematho_2015_06_nannaku_prematho",
+      "title": "06 - Nannaku Prematho",
+      "album": "Nannaku Prematho - (2015)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "romantic",
+        "feel-good"
+      ],
+      "themes": [
+        "love"
+      ],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Nannaku Prematho - (2015). Suitable for romantic, feel-good listening.",
+      "keywords": [
+        "(2015)",
+        "06",
+        "feel",
+        "good",
+        "love",
+        "nannaku",
+        "prematho",
+        "romantic"
+      ],
+      "voice_aliases": [
+        "play 06 - Nannaku Prematho",
+        "play Nannaku Prematho - (2015) song",
+        "play romantic song",
+        "play telugu romantic music",
+        "play 06 - nannaku prematho",
+        "i want 06 - Nannaku Prematho",
+        "start 06 - Nannaku Prematho"
+      ]
+    },
+    {
+      "id": "nenu_sailaja_2015_01_night_is_still_young",
+      "title": "01 - Night Is Still Young",
+      "album": "Nenu Sailaja - (2015)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Nenu Sailaja - (2015). Suitable for melody listening.",
+      "keywords": [
+        "(2015)",
+        "01",
+        "is",
+        "melody",
+        "nenu",
+        "night",
+        "sailaja",
+        "still",
+        "young"
+      ],
+      "voice_aliases": [
+        "play 01 - Night Is Still Young",
+        "play Nenu Sailaja - (2015) song",
+        "play melody song",
+        "play telugu melody music",
+        "play 01 - night is still young",
+        "i want 01 - Night Is Still Young",
+        "start 01 - Night Is Still Young"
+      ]
+    },
+    {
+      "id": "nenu_sailaja_2015_02_crazy_feeling",
+      "title": "02 - Crazy Feeling",
+      "album": "Nenu Sailaja - (2015)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Nenu Sailaja - (2015). Suitable for melody listening.",
+      "keywords": [
+        "(2015)",
+        "02",
+        "crazy",
+        "feeling",
+        "melody",
+        "nenu",
+        "sailaja"
+      ],
+      "voice_aliases": [
+        "play 02 - Crazy Feeling",
+        "play Nenu Sailaja - (2015) song",
+        "play melody song",
+        "play telugu melody music",
+        "play 02 - crazy feeling",
+        "i want 02 - Crazy Feeling",
+        "start 02 - Crazy Feeling"
+      ]
+    },
+    {
+      "id": "nenu_sailaja_2015_03_masti_masti",
+      "title": "03 - Masti Masti",
+      "album": "Nenu Sailaja - (2015)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Nenu Sailaja - (2015). Suitable for melody listening.",
+      "keywords": [
+        "(2015)",
+        "03",
+        "masti",
+        "melody",
+        "nenu",
+        "sailaja"
+      ],
+      "voice_aliases": [
+        "play 03 - Masti Masti",
+        "play Nenu Sailaja - (2015) song",
+        "play melody song",
+        "play telugu melody music",
+        "play 03 - masti masti",
+        "i want 03 - Masti Masti",
+        "start 03 - Masti Masti"
+      ]
+    },
+    {
+      "id": "nenu_sailaja_2015_04_sailaja_sailaja",
+      "title": "04 - Sailaja Sailaja",
+      "album": "Nenu Sailaja - (2015)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Nenu Sailaja - (2015). Suitable for melody listening.",
+      "keywords": [
+        "(2015)",
+        "04",
+        "melody",
+        "nenu",
+        "sailaja"
+      ],
+      "voice_aliases": [
+        "play 04 - Sailaja Sailaja",
+        "play Nenu Sailaja - (2015) song",
+        "play melody song",
+        "play telugu melody music",
+        "play 04 - sailaja sailaja",
+        "i want 04 - Sailaja Sailaja",
+        "start 04 - Sailaja Sailaja"
+      ]
+    },
+    {
+      "id": "nenu_sailaja_2015_05_em_cheppanu",
+      "title": "05 - Em Cheppanu",
+      "album": "Nenu Sailaja - (2015)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Nenu Sailaja - (2015). Suitable for melody listening.",
+      "keywords": [
+        "(2015)",
+        "05",
+        "cheppanu",
+        "em",
+        "melody",
+        "nenu",
+        "sailaja"
+      ],
+      "voice_aliases": [
+        "play 05 - Em Cheppanu",
+        "play Nenu Sailaja - (2015) song",
+        "play melody song",
+        "play telugu melody music",
+        "play 05 - em cheppanu",
+        "i want 05 - Em Cheppanu",
+        "start 05 - Em Cheppanu"
+      ]
+    },
+    {
+      "id": "nenu_sailaja_2015_06_ee_premaki",
+      "title": "06 - Ee Premaki",
+      "album": "Nenu Sailaja - (2015)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "romantic",
+        "feel-good"
+      ],
+      "themes": [
+        "love"
+      ],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Nenu Sailaja - (2015). Suitable for romantic, feel-good listening.",
+      "keywords": [
+        "(2015)",
+        "06",
+        "ee",
+        "feel",
+        "good",
+        "love",
+        "nenu",
+        "premaki",
+        "romantic",
+        "sailaja"
+      ],
+      "voice_aliases": [
+        "play 06 - Ee Premaki",
+        "play Nenu Sailaja - (2015) song",
+        "play romantic song",
+        "play telugu romantic music",
+        "play 06 - ee premaki",
+        "i want 06 - Ee Premaki",
+        "start 06 - Ee Premaki"
+      ]
+    },
+    {
+      "id": "premam_2016_320kbps_evare",
+      "title": "Evare",
+      "album": "Premam (2016) ~ 320KBPS",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "romantic",
+        "feel-good"
+      ],
+      "themes": [
+        "love"
+      ],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Premam (2016) ~ 320KBPS. Suitable for romantic, feel-good listening.",
+      "keywords": [
+        "(2016)",
+        "320kbps",
+        "evare",
+        "feel",
+        "good",
+        "love",
+        "premam",
+        "romantic",
+        "~"
+      ],
+      "voice_aliases": [
+        "play Evare",
+        "play Premam (2016) ~ 320KBPS song",
+        "play romantic song",
+        "play telugu romantic music",
+        "play evare",
+        "i want Evare",
+        "start Evare"
+      ]
+    },
+    {
+      "id": "premam_2016_320kbps_agarothula",
+      "title": "Agarothula",
+      "album": "Premam (2016) ~ 320KBPS",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Premam (2016) ~ 320KBPS. Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "320kbps",
+        "agarothula",
+        "melody",
+        "premam",
+        "~"
+      ],
+      "voice_aliases": [
+        "play Agarothula",
+        "play Premam (2016) ~ 320KBPS song",
+        "play melody song",
+        "play telugu melody music",
+        "play agarothula",
+        "i want Agarothula",
+        "start Agarothula"
+      ]
+    },
+    {
+      "id": "premam_2016_320kbps_ninna_leni",
+      "title": "Ninna Leni",
+      "album": "Premam (2016) ~ 320KBPS",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Premam (2016) ~ 320KBPS. Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "320kbps",
+        "leni",
+        "melody",
+        "ninna",
+        "premam",
+        "~"
+      ],
+      "voice_aliases": [
+        "play Ninna Leni",
+        "play Premam (2016) ~ 320KBPS song",
+        "play melody song",
+        "play telugu melody music",
+        "play ninna leni",
+        "i want Ninna Leni",
+        "start Ninna Leni"
+      ]
+    },
+    {
+      "id": "premam_2016_320kbps_prema_pusani",
+      "title": "Prema Pusani",
+      "album": "Premam (2016) ~ 320KBPS",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "romantic",
+        "feel-good"
+      ],
+      "themes": [
+        "love"
+      ],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Premam (2016) ~ 320KBPS. Suitable for romantic, feel-good listening.",
+      "keywords": [
+        "(2016)",
+        "320kbps",
+        "feel",
+        "good",
+        "love",
+        "prema",
+        "premam",
+        "pusani",
+        "romantic",
+        "~"
+      ],
+      "voice_aliases": [
+        "play Prema Pusani",
+        "play Premam (2016) ~ 320KBPS song",
+        "play romantic song",
+        "play telugu romantic music",
+        "play prema pusani",
+        "i want Prema Pusani",
+        "start Prema Pusani"
+      ]
+    },
+    {
+      "id": "premam_2016_320kbps_bang_bang",
+      "title": "Bang Bang",
+      "album": "Premam (2016) ~ 320KBPS",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "energetic",
+        "dance"
+      ],
+      "themes": [
+        "celebration"
+      ],
+      "energy": "high",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Premam (2016) ~ 320KBPS. Suitable for energetic, dance listening.",
+      "keywords": [
+        "(2016)",
+        "320kbps",
+        "bang",
+        "celebration",
+        "dance",
+        "energetic",
+        "premam",
+        "~"
+      ],
+      "voice_aliases": [
+        "play Bang Bang",
+        "play Premam (2016) ~ 320KBPS song",
+        "play energetic song",
+        "play telugu energetic music",
+        "play bang bang",
+        "i want Bang Bang",
+        "start Bang Bang"
+      ]
+    },
+    {
+      "id": "premam_2016_320kbps_enno_sarlu",
+      "title": "Enno Sarlu",
+      "album": "Premam (2016) ~ 320KBPS",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Premam (2016) ~ 320KBPS. Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "320kbps",
+        "enno",
+        "melody",
+        "premam",
+        "sarlu",
+        "~"
+      ],
+      "voice_aliases": [
+        "play Enno Sarlu",
+        "play Premam (2016) ~ 320KBPS song",
+        "play melody song",
+        "play telugu melody music",
+        "play enno sarlu",
+        "i want Enno Sarlu",
+        "start Enno Sarlu"
+      ]
+    },
+    {
+      "id": "premam_2016_320kbps_evadu_evadu",
+      "title": "Evadu Evadu",
+      "album": "Premam (2016) ~ 320KBPS",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Premam (2016) ~ 320KBPS. Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "320kbps",
+        "evadu",
+        "melody",
+        "premam",
+        "~"
+      ],
+      "voice_aliases": [
+        "play Evadu Evadu",
+        "play Premam (2016) ~ 320KBPS song",
+        "play melody song",
+        "play telugu melody music",
+        "play evadu evadu",
+        "i want Evadu Evadu",
+        "start Evadu Evadu"
+      ]
+    },
+    {
+      "id": "run_raja_run_2014_320kbps_rajadhi_rajanappa",
+      "title": "Rajadhi Rajanappa",
+      "album": "Run Raja Run (2014) ~320kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Run Raja Run (2014) ~320kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2014)",
+        "melody",
+        "raja",
+        "rajadhi",
+        "rajanappa",
+        "run",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Rajadhi Rajanappa",
+        "play Run Raja Run (2014) ~320kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play rajadhi rajanappa",
+        "i want Rajadhi Rajanappa",
+        "start Rajadhi Rajanappa"
+      ]
+    },
+    {
+      "id": "run_raja_run_2014_320kbps_bujjiamma_bujjiamma",
+      "title": "Bujjiamma Bujjiamma",
+      "album": "Run Raja Run (2014) ~320kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Run Raja Run (2014) ~320kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2014)",
+        "bujjiamma",
+        "melody",
+        "raja",
+        "run",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Bujjiamma Bujjiamma",
+        "play Run Raja Run (2014) ~320kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play bujjiamma bujjiamma",
+        "i want Bujjiamma Bujjiamma",
+        "start Bujjiamma Bujjiamma"
+      ]
+    },
+    {
+      "id": "run_raja_run_2014_320kbps_vadhantune_nenu_vadhantune",
+      "title": "Vadhantune Nenu Vadhantune",
+      "album": "Run Raja Run (2014) ~320kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Run Raja Run (2014) ~320kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2014)",
+        "melody",
+        "nenu",
+        "raja",
+        "run",
+        "vadhantune",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Vadhantune Nenu Vadhantune",
+        "play Run Raja Run (2014) ~320kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play vadhantune nenu vadhantune",
+        "i want Vadhantune Nenu Vadhantune",
+        "start Vadhantune Nenu Vadhantune"
+      ]
+    },
+    {
+      "id": "run_raja_run_2014_320kbps_coma_coma_coma",
+      "title": "Coma Coma Coma",
+      "album": "Run Raja Run (2014) ~320kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Run Raja Run (2014) ~320kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2014)",
+        "coma",
+        "melody",
+        "raja",
+        "run",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Coma Coma Coma",
+        "play Run Raja Run (2014) ~320kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play coma coma coma",
+        "i want Coma Coma Coma",
+        "start Coma Coma Coma"
+      ]
+    },
+    {
+      "id": "run_raja_run_2014_320kbps_shanthi_om_shanthi",
+      "title": "Shanthi Om Shanthi",
+      "album": "Run Raja Run (2014) ~320kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Run Raja Run (2014) ~320kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2014)",
+        "melody",
+        "om",
+        "raja",
+        "run",
+        "shanthi",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Shanthi Om Shanthi",
+        "play Run Raja Run (2014) ~320kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play shanthi om shanthi",
+        "i want Shanthi Om Shanthi",
+        "start Shanthi Om Shanthi"
+      ]
+    },
+    {
+      "id": "sahasam_swasaga_sagipo_2016_01_shokilla",
+      "title": "01 - Shokilla",
+      "album": "Sahasam Swasaga Sagipo - (2016)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Sahasam Swasaga Sagipo - (2016). Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "01",
+        "melody",
+        "sagipo",
+        "sahasam",
+        "shokilla",
+        "swasaga"
+      ],
+      "voice_aliases": [
+        "play 01 - Shokilla",
+        "play Sahasam Swasaga Sagipo - (2016) song",
+        "play melody song",
+        "play telugu melody music",
+        "play 01 - shokilla",
+        "i want 01 - Shokilla",
+        "start 01 - Shokilla"
+      ]
+    },
+    {
+      "id": "sahasam_swasaga_sagipo_2016_02_kannula_munde",
+      "title": "02 - Kannula Munde",
+      "album": "Sahasam Swasaga Sagipo - (2016)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Sahasam Swasaga Sagipo - (2016). Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "02",
+        "kannula",
+        "melody",
+        "munde",
+        "sagipo",
+        "sahasam",
+        "swasaga"
+      ],
+      "voice_aliases": [
+        "play 02 - Kannula Munde",
+        "play Sahasam Swasaga Sagipo - (2016) song",
+        "play melody song",
+        "play telugu melody music",
+        "play 02 - kannula munde",
+        "i want 02 - Kannula Munde",
+        "start 02 - Kannula Munde"
+      ]
+    },
+    {
+      "id": "sahasam_swasaga_sagipo_2016_03_chakkori",
+      "title": "03 - Chakkori",
+      "album": "Sahasam Swasaga Sagipo - (2016)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Sahasam Swasaga Sagipo - (2016). Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "03",
+        "chakkori",
+        "melody",
+        "sagipo",
+        "sahasam",
+        "swasaga"
+      ],
+      "voice_aliases": [
+        "play 03 - Chakkori",
+        "play Sahasam Swasaga Sagipo - (2016) song",
+        "play melody song",
+        "play telugu melody music",
+        "play 03 - chakkori",
+        "i want 03 - Chakkori",
+        "start 03 - Chakkori"
+      ]
+    },
+    {
+      "id": "sahasam_swasaga_sagipo_2016_04_taanu_nenu",
+      "title": "04 - Taanu Nenu",
+      "album": "Sahasam Swasaga Sagipo - (2016)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Sahasam Swasaga Sagipo - (2016). Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "04",
+        "melody",
+        "nenu",
+        "sagipo",
+        "sahasam",
+        "swasaga",
+        "taanu"
+      ],
+      "voice_aliases": [
+        "play 04 - Taanu Nenu",
+        "play Sahasam Swasaga Sagipo - (2016) song",
+        "play melody song",
+        "play telugu melody music",
+        "play 04 - taanu nenu",
+        "i want 04 - Taanu Nenu",
+        "start 04 - Taanu Nenu"
+      ]
+    },
+    {
+      "id": "sahasam_swasaga_sagipo_2016_05_vellipomaakey",
+      "title": "05 - Vellipomaakey",
+      "album": "Sahasam Swasaga Sagipo - (2016)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Sahasam Swasaga Sagipo - (2016). Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "05",
+        "melody",
+        "sagipo",
+        "sahasam",
+        "swasaga",
+        "vellipomaakey"
+      ],
+      "voice_aliases": [
+        "play 05 - Vellipomaakey",
+        "play Sahasam Swasaga Sagipo - (2016) song",
+        "play melody song",
+        "play telugu melody music",
+        "play 05 - vellipomaakey",
+        "i want 05 - Vellipomaakey",
+        "start 05 - Vellipomaakey"
+      ]
+    },
+    {
+      "id": "sardaar_gabbar_singh_2016_01_sardaar",
+      "title": "01 - Sardaar",
+      "album": "Sardaar Gabbar Singh - (2016)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Sardaar Gabbar Singh - (2016). Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "01",
+        "gabbar",
+        "melody",
+        "sardaar",
+        "singh"
+      ],
+      "voice_aliases": [
+        "play 01 - Sardaar",
+        "play Sardaar Gabbar Singh - (2016) song",
+        "play melody song",
+        "play telugu melody music",
+        "play 01 - sardaar",
+        "i want 01 - Sardaar",
+        "start 01 - Sardaar"
+      ]
+    },
+    {
+      "id": "sardaar_gabbar_singh_2016_02_o_pilla_shubhanalla",
+      "title": "02 - O Pilla Shubhanalla",
+      "album": "Sardaar Gabbar Singh - (2016)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Sardaar Gabbar Singh - (2016). Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "02",
+        "gabbar",
+        "melody",
+        "o",
+        "pilla",
+        "sardaar",
+        "shubhanalla",
+        "singh"
+      ],
+      "voice_aliases": [
+        "play 02 - O Pilla Shubhanalla",
+        "play Sardaar Gabbar Singh - (2016) song",
+        "play melody song",
+        "play telugu melody music",
+        "play 02 - o pilla shubhanalla",
+        "i want 02 - O Pilla Shubhanalla",
+        "start 02 - O Pilla Shubhanalla"
+      ]
+    },
+    {
+      "id": "sardaar_gabbar_singh_2016_03_tauba_tauba",
+      "title": "03 - Tauba Tauba",
+      "album": "Sardaar Gabbar Singh - (2016)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Sardaar Gabbar Singh - (2016). Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "03",
+        "gabbar",
+        "melody",
+        "sardaar",
+        "singh",
+        "tauba"
+      ],
+      "voice_aliases": [
+        "play 03 - Tauba Tauba",
+        "play Sardaar Gabbar Singh - (2016) song",
+        "play melody song",
+        "play telugu melody music",
+        "play 03 - tauba tauba",
+        "i want 03 - Tauba Tauba",
+        "start 03 - Tauba Tauba"
+      ]
+    },
+    {
+      "id": "sardaar_gabbar_singh_2016_04_aadevadanna_eedevadanna",
+      "title": "04 - Aadevadanna Eedevadanna",
+      "album": "Sardaar Gabbar Singh - (2016)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Sardaar Gabbar Singh - (2016). Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "04",
+        "aadevadanna",
+        "eedevadanna",
+        "gabbar",
+        "melody",
+        "sardaar",
+        "singh"
+      ],
+      "voice_aliases": [
+        "play 04 - Aadevadanna Eedevadanna",
+        "play Sardaar Gabbar Singh - (2016) song",
+        "play melody song",
+        "play telugu melody music",
+        "play 04 - aadevadanna eedevadanna",
+        "i want 04 - Aadevadanna Eedevadanna",
+        "start 04 - Aadevadanna Eedevadanna"
+      ]
+    },
+    {
+      "id": "sardaar_gabbar_singh_2016_05_nee_chepakallu",
+      "title": "05 - Nee Chepakallu",
+      "album": "Sardaar Gabbar Singh - (2016)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Sardaar Gabbar Singh - (2016). Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "05",
+        "chepakallu",
+        "gabbar",
+        "melody",
+        "nee",
+        "sardaar",
+        "singh"
+      ],
+      "voice_aliases": [
+        "play 05 - Nee Chepakallu",
+        "play Sardaar Gabbar Singh - (2016) song",
+        "play melody song",
+        "play telugu melody music",
+        "play 05 - nee chepakallu",
+        "i want 05 - Nee Chepakallu",
+        "start 05 - Nee Chepakallu"
+      ]
+    },
+    {
+      "id": "sardaar_gabbar_singh_2016_06_khakhee_chokka",
+      "title": "06 - Khakhee Chokka",
+      "album": "Sardaar Gabbar Singh - (2016)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Sardaar Gabbar Singh - (2016). Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "06",
+        "chokka",
+        "gabbar",
+        "khakhee",
+        "melody",
+        "sardaar",
+        "singh"
+      ],
+      "voice_aliases": [
+        "play 06 - Khakhee Chokka",
+        "play Sardaar Gabbar Singh - (2016) song",
+        "play melody song",
+        "play telugu melody music",
+        "play 06 - khakhee chokka",
+        "i want 06 - Khakhee Chokka",
+        "start 06 - Khakhee Chokka"
+      ]
+    },
+    {
+      "id": "sarrainodu_2016_320kbps_athiloka_sundari",
+      "title": "Athiloka Sundari",
+      "album": "Sarrainodu (2016) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "romantic",
+        "feel-good"
+      ],
+      "themes": [
+        "love"
+      ],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Sarrainodu (2016) ~320Kbps. Suitable for romantic, feel-good listening.",
+      "keywords": [
+        "(2016)",
+        "athiloka",
+        "feel",
+        "good",
+        "love",
+        "romantic",
+        "sarrainodu",
+        "sundari",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Athiloka Sundari",
+        "play Sarrainodu (2016) ~320Kbps song",
+        "play romantic song",
+        "play telugu romantic music",
+        "play athiloka sundari",
+        "i want Athiloka Sundari",
+        "start Athiloka Sundari"
+      ]
+    },
+    {
+      "id": "sarrainodu_2016_320kbps_you_are_my_mla",
+      "title": "You Are My Mla",
+      "album": "Sarrainodu (2016) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Sarrainodu (2016) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "are",
+        "melody",
+        "mla",
+        "my",
+        "sarrainodu",
+        "you",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play You Are My Mla",
+        "play Sarrainodu (2016) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play you are my mla",
+        "i want You Are My Mla",
+        "start You Are My Mla"
+      ]
+    },
+    {
+      "id": "sarrainodu_2016_320kbps_private_party",
+      "title": "Private_Party",
+      "album": "Sarrainodu (2016) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "energetic",
+        "dance"
+      ],
+      "themes": [
+        "celebration"
+      ],
+      "energy": "high",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Sarrainodu (2016) ~320Kbps. Suitable for energetic, dance listening.",
+      "keywords": [
+        "(2016)",
+        "celebration",
+        "dance",
+        "energetic",
+        "private_party",
+        "sarrainodu",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Private_Party",
+        "play Sarrainodu (2016) ~320Kbps song",
+        "play energetic song",
+        "play telugu energetic music",
+        "play private_party",
+        "i want Private_Party",
+        "start Private_Party"
+      ]
+    },
+    {
+      "id": "sarrainodu_2016_320kbps_blockbuster",
+      "title": "Blockbuster",
+      "album": "Sarrainodu (2016) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "energetic",
+        "dance"
+      ],
+      "themes": [
+        "celebration"
+      ],
+      "energy": "high",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Sarrainodu (2016) ~320Kbps. Suitable for energetic, dance listening.",
+      "keywords": [
+        "(2016)",
+        "blockbuster",
+        "celebration",
+        "dance",
+        "energetic",
+        "sarrainodu",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Blockbuster",
+        "play Sarrainodu (2016) ~320Kbps song",
+        "play energetic song",
+        "play telugu energetic music",
+        "play blockbuster",
+        "i want Blockbuster",
+        "start Blockbuster"
+      ]
+    },
+    {
+      "id": "sarrainodu_2016_320kbps_telusaa_telusaa",
+      "title": "Telusaa Telusaa",
+      "album": "Sarrainodu (2016) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Sarrainodu (2016) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "melody",
+        "sarrainodu",
+        "telusaa",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Telusaa Telusaa",
+        "play Sarrainodu (2016) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play telusaa telusaa",
+        "i want Telusaa Telusaa",
+        "start Telusaa Telusaa"
+      ]
+    },
+    {
+      "id": "sarrainodu_2016_320kbps_sarrainodu",
+      "title": "Sarrainodu",
+      "album": "Sarrainodu (2016) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Sarrainodu (2016) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "melody",
+        "sarrainodu",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Sarrainodu",
+        "play Sarrainodu (2016) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play sarrainodu",
+        "i want Sarrainodu",
+        "start Sarrainodu"
+      ]
+    },
+    {
+      "id": "sikindar_2014_320kbps_bang_bang_bang",
+      "title": "Bang Bang Bang",
+      "album": "Sikindar (2014) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "energetic",
+        "dance"
+      ],
+      "themes": [
+        "celebration"
+      ],
+      "energy": "high",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Sikindar (2014) ~320Kbps. Suitable for energetic, dance listening.",
+      "keywords": [
+        "(2014)",
+        "bang",
+        "celebration",
+        "dance",
+        "energetic",
+        "sikindar",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Bang Bang Bang",
+        "play Sikindar (2014) ~320Kbps song",
+        "play energetic song",
+        "play telugu energetic music",
+        "play bang bang bang",
+        "i want Bang Bang Bang",
+        "start Bang Bang Bang"
+      ]
+    },
+    {
+      "id": "sikindar_2014_320kbps_thanu_gorantha",
+      "title": "Thanu Gorantha",
+      "album": "Sikindar (2014) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Sikindar (2014) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2014)",
+        "gorantha",
+        "melody",
+        "sikindar",
+        "thanu",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Thanu Gorantha",
+        "play Sikindar (2014) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play thanu gorantha",
+        "i want Thanu Gorantha",
+        "start Thanu Gorantha"
+      ]
+    },
+    {
+      "id": "sikindar_2014_320kbps_ek_do_teen_chaar",
+      "title": "Ek Do Teen Chaar",
+      "album": "Sikindar (2014) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Sikindar (2014) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2014)",
+        "chaar",
+        "do",
+        "ek",
+        "melody",
+        "sikindar",
+        "teen",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Ek Do Teen Chaar",
+        "play Sikindar (2014) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play ek do teen chaar",
+        "i want Ek Do Teen Chaar",
+        "start Ek Do Teen Chaar"
+      ]
+    },
+    {
+      "id": "sikindar_2014_320kbps_nene_kani_nenai_undaga",
+      "title": "Nene Kani Nenai Undaga",
+      "album": "Sikindar (2014) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Sikindar (2014) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2014)",
+        "kani",
+        "melody",
+        "nenai",
+        "nene",
+        "sikindar",
+        "undaga",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Nene Kani Nenai Undaga",
+        "play Sikindar (2014) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play nene kani nenai undaga",
+        "i want Nene Kani Nenai Undaga",
+        "start Nene Kani Nenai Undaga"
+      ]
+    },
+    {
+      "id": "sikindar_2014_320kbps_chirunavvey_speciality",
+      "title": "Chirunavvey Speciality",
+      "album": "Sikindar (2014) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "romantic",
+        "feel-good"
+      ],
+      "themes": [
+        "love"
+      ],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Sikindar (2014) ~320Kbps. Suitable for romantic, feel-good listening.",
+      "keywords": [
+        "(2014)",
+        "chirunavvey",
+        "feel",
+        "good",
+        "love",
+        "romantic",
+        "sikindar",
+        "speciality",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Chirunavvey Speciality",
+        "play Sikindar (2014) ~320Kbps song",
+        "play romantic song",
+        "play telugu romantic music",
+        "play chirunavvey speciality",
+        "i want Chirunavvey Speciality",
+        "start Chirunavvey Speciality"
+      ]
+    },
+    {
+      "id": "soggade_chinni_nayana_2015_01_dikka_dikka_dum",
+      "title": "01 - Dikka Dikka Dum",
+      "album": "Soggade Chinni Nayana - (2015)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "energetic",
+        "dance"
+      ],
+      "themes": [
+        "celebration"
+      ],
+      "energy": "high",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Soggade Chinni Nayana - (2015). Suitable for energetic, dance listening.",
+      "keywords": [
+        "(2015)",
+        "01",
+        "celebration",
+        "chinni",
+        "dance",
+        "dikka",
+        "dum",
+        "energetic",
+        "nayana",
+        "soggade"
+      ],
+      "voice_aliases": [
+        "play 01 - Dikka Dikka Dum",
+        "play Soggade Chinni Nayana - (2015) song",
+        "play energetic song",
+        "play telugu energetic music",
+        "play 01 - dikka dikka dum",
+        "i want 01 - Dikka Dikka Dum",
+        "start 01 - Dikka Dikka Dum"
+      ]
+    },
+    {
+      "id": "soggade_chinni_nayana_2015_02_nee_navve",
+      "title": "02 - Nee Navve",
+      "album": "Soggade Chinni Nayana - (2015)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "romantic",
+        "feel-good"
+      ],
+      "themes": [
+        "love"
+      ],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Soggade Chinni Nayana - (2015). Suitable for romantic, feel-good listening.",
+      "keywords": [
+        "(2015)",
+        "02",
+        "chinni",
+        "feel",
+        "good",
+        "love",
+        "navve",
+        "nayana",
+        "nee",
+        "romantic",
+        "soggade"
+      ],
+      "voice_aliases": [
+        "play 02 - Nee Navve",
+        "play Soggade Chinni Nayana - (2015) song",
+        "play romantic song",
+        "play telugu romantic music",
+        "play 02 - nee navve",
+        "i want 02 - Nee Navve",
+        "start 02 - Nee Navve"
+      ]
+    },
+    {
+      "id": "soggade_chinni_nayana_2015_03_vasthane_vasthane",
+      "title": "03 - Vasthane Vasthane",
+      "album": "Soggade Chinni Nayana - (2015)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Soggade Chinni Nayana - (2015). Suitable for melody listening.",
+      "keywords": [
+        "(2015)",
+        "03",
+        "chinni",
+        "melody",
+        "nayana",
+        "soggade",
+        "vasthane"
+      ],
+      "voice_aliases": [
+        "play 03 - Vasthane Vasthane",
+        "play Soggade Chinni Nayana - (2015) song",
+        "play melody song",
+        "play telugu melody music",
+        "play 03 - vasthane vasthane",
+        "i want 03 - Vasthane Vasthane",
+        "start 03 - Vasthane Vasthane"
+      ]
+    },
+    {
+      "id": "soggade_chinni_nayana_2015_04_untale_untale_nee_vente_untale",
+      "title": "04 - Untale Untale Nee Vente Untale",
+      "album": "Soggade Chinni Nayana - (2015)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Soggade Chinni Nayana - (2015). Suitable for melody listening.",
+      "keywords": [
+        "(2015)",
+        "04",
+        "chinni",
+        "melody",
+        "nayana",
+        "nee",
+        "soggade",
+        "untale",
+        "vente"
+      ],
+      "voice_aliases": [
+        "play 04 - Untale Untale Nee Vente Untale",
+        "play Soggade Chinni Nayana - (2015) song",
+        "play melody song",
+        "play telugu melody music",
+        "play 04 - untale untale nee vente untale",
+        "i want 04 - Untale Untale Nee Vente Untale",
+        "start 04 - Untale Untale Nee Vente Untale"
+      ]
+    },
+    {
+      "id": "soggade_chinni_nayana_2015_05_addhira_banna",
+      "title": "05 - Addhira Banna",
+      "album": "Soggade Chinni Nayana - (2015)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Soggade Chinni Nayana - (2015). Suitable for melody listening.",
+      "keywords": [
+        "(2015)",
+        "05",
+        "addhira",
+        "banna",
+        "chinni",
+        "melody",
+        "nayana",
+        "soggade"
+      ],
+      "voice_aliases": [
+        "play 05 - Addhira Banna",
+        "play Soggade Chinni Nayana - (2015) song",
+        "play melody song",
+        "play telugu melody music",
+        "play 05 - addhira banna",
+        "i want 05 - Addhira Banna",
+        "start 05 - Addhira Banna"
+      ]
+    },
+    {
+      "id": "soggade_chinni_nayana_2015_06_soggade_chinni_nayana",
+      "title": "06 - Soggade Chinni Nayana",
+      "album": "Soggade Chinni Nayana - (2015)",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Soggade Chinni Nayana - (2015). Suitable for melody listening.",
+      "keywords": [
+        "(2015)",
+        "06",
+        "chinni",
+        "melody",
+        "nayana",
+        "soggade"
+      ],
+      "voice_aliases": [
+        "play 06 - Soggade Chinni Nayana",
+        "play Soggade Chinni Nayana - (2015) song",
+        "play melody song",
+        "play telugu melody music",
+        "play 06 - soggade chinni nayana",
+        "i want 06 - Soggade Chinni Nayana",
+        "start 06 - Soggade Chinni Nayana"
+      ]
+    },
+    {
+      "id": "khaidi_no_150_2016_320kbps_ammadu_lets_do_kummudu",
+      "title": "Ammadu Lets Do Kummudu",
+      "album": "Khaidi No 150 (2016) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "energetic",
+        "dance"
+      ],
+      "themes": [
+        "celebration"
+      ],
+      "energy": "high",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Khaidi No 150 (2016) ~320Kbps. Suitable for energetic, dance listening.",
+      "keywords": [
+        "(2016)",
+        "150",
+        "ammadu",
+        "celebration",
+        "dance",
+        "do",
+        "energetic",
+        "khaidi",
+        "kummudu",
+        "lets",
+        "no",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Ammadu Lets Do Kummudu",
+        "play Khaidi No 150 (2016) ~320Kbps song",
+        "play energetic song",
+        "play telugu energetic music",
+        "play ammadu lets do kummudu",
+        "i want Ammadu Lets Do Kummudu",
+        "start Ammadu Lets Do Kummudu"
+      ]
+    },
+    {
+      "id": "khaidi_no_150_2016_320kbps_sundari",
+      "title": "Sundari",
+      "album": "Khaidi No 150 (2016) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "romantic",
+        "feel-good"
+      ],
+      "themes": [
+        "love"
+      ],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Khaidi No 150 (2016) ~320Kbps. Suitable for romantic, feel-good listening.",
+      "keywords": [
+        "(2016)",
+        "150",
+        "feel",
+        "good",
+        "khaidi",
+        "love",
+        "no",
+        "romantic",
+        "sundari",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Sundari",
+        "play Khaidi No 150 (2016) ~320Kbps song",
+        "play romantic song",
+        "play telugu romantic music",
+        "play sundari",
+        "i want Sundari",
+        "start Sundari"
+      ]
+    },
+    {
+      "id": "khaidi_no_150_2016_320kbps_you_me",
+      "title": "You & Me",
+      "album": "Khaidi No 150 (2016) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Khaidi No 150 (2016) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "&",
+        "(2016)",
+        "150",
+        "khaidi",
+        "me",
+        "melody",
+        "no",
+        "you",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play You & Me",
+        "play Khaidi No 150 (2016) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play you & me",
+        "i want You & Me",
+        "start You & Me"
+      ]
+    },
+    {
+      "id": "khaidi_no_150_2016_320kbps_ratthaalu",
+      "title": "Ratthaalu",
+      "album": "Khaidi No 150 (2016) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Khaidi No 150 (2016) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2016)",
+        "150",
+        "khaidi",
+        "melody",
+        "no",
+        "ratthaalu",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Ratthaalu",
+        "play Khaidi No 150 (2016) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play ratthaalu",
+        "i want Ratthaalu",
+        "start Ratthaalu"
+      ]
+    },
+    {
+      "id": "khaidi_no_150_2016_320kbps_neeru_neeru",
+      "title": "Neeru Neeru",
+      "album": "Khaidi No 150 (2016) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "dramatic"
+      ],
+      "themes": [
+        "emotion"
+      ],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Khaidi No 150 (2016) ~320Kbps. Suitable for dramatic listening.",
+      "keywords": [
+        "(2016)",
+        "150",
+        "dramatic",
+        "emotion",
+        "khaidi",
+        "neeru",
+        "no",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Neeru Neeru",
+        "play Khaidi No 150 (2016) ~320Kbps song",
+        "play dramatic song",
+        "play telugu dramatic music",
+        "play neeru neeru",
+        "i want Neeru Neeru",
+        "start Neeru Neeru"
+      ]
+    },
+    {
+      "id": "nenu_local_2017_320kbps_next_enti",
+      "title": "Next Enti",
+      "album": "Nenu Local (2017) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Nenu Local (2017) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2017)",
+        "enti",
+        "local",
+        "melody",
+        "nenu",
+        "next",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Next Enti",
+        "play Nenu Local (2017) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play next enti",
+        "i want Next Enti",
+        "start Next Enti"
+      ]
+    },
+    {
+      "id": "nenu_local_2017_320kbps_arere_yekkada",
+      "title": "Arere Yekkada",
+      "album": "Nenu Local (2017) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Nenu Local (2017) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2017)",
+        "arere",
+        "local",
+        "melody",
+        "nenu",
+        "yekkada",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Arere Yekkada",
+        "play Nenu Local (2017) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play arere yekkada",
+        "i want Arere Yekkada",
+        "start Arere Yekkada"
+      ]
+    },
+    {
+      "id": "nenu_local_2017_320kbps_disturb_chestha_ninnu",
+      "title": "Disturb Chestha Ninnu",
+      "album": "Nenu Local (2017) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Nenu Local (2017) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2017)",
+        "chestha",
+        "disturb",
+        "local",
+        "melody",
+        "nenu",
+        "ninnu",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Disturb Chestha Ninnu",
+        "play Nenu Local (2017) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play disturb chestha ninnu",
+        "i want Disturb Chestha Ninnu",
+        "start Disturb Chestha Ninnu"
+      ]
+    },
+    {
+      "id": "nenu_local_2017_320kbps_champesaave_nannu",
+      "title": "Champesaave Nannu",
+      "album": "Nenu Local (2017) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Nenu Local (2017) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2017)",
+        "champesaave",
+        "local",
+        "melody",
+        "nannu",
+        "nenu",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Champesaave Nannu",
+        "play Nenu Local (2017) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play champesaave nannu",
+        "i want Champesaave Nannu",
+        "start Champesaave Nannu"
+      ]
+    },
+    {
+      "id": "nenu_local_2017_320kbps_side_please",
+      "title": "Side Please",
+      "album": "Nenu Local (2017) ~320Kbps",
+      "language": "Telugu",
+      "category": "Movie Song",
+      "genre": [
+        "Soundtrack"
+      ],
+      "moods": [
+        "melody"
+      ],
+      "themes": [],
+      "energy": "medium",
+      "tempo": "medium",
+      "description": "Telugu soundtrack from Nenu Local (2017) ~320Kbps. Suitable for melody listening.",
+      "keywords": [
+        "(2017)",
+        "local",
+        "melody",
+        "nenu",
+        "please",
+        "side",
+        "~320kbps"
+      ],
+      "voice_aliases": [
+        "play Side Please",
+        "play Nenu Local (2017) ~320Kbps song",
+        "play melody song",
+        "play telugu melody music",
+        "play side please",
+        "i want Side Please",
+        "start Side Please"
+      ]
+    }
+  ]
+}

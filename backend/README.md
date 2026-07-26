@@ -271,7 +271,7 @@ See [`esp32/voice_button.ino`](esp32/voice_button.ino) for the full Arduino sket
 The sketch talks to the backend over `WSS /api/ws/voice`, streaming raw 16kHz PCM in and
 receiving raw 24kHz PCM back — no WAV framing on either side.
 
-1. Install the **"WebSockets" by Markus Sattler** library (Arduino IDE → Library Manager).
+1. Install the **"WebSockets" by Markus Sattler** and **"ESP8266Audio" by Earle F. Philhower, III** libraries (Arduino IDE → Library Manager). ESP8266Audio is used only for its MP3 decoder — see "SD-card song playback" below.
 2. Run `cloudflared tunnel --url http://localhost:8000` on the machine running the backend
    (no need to bind uvicorn to `0.0.0.0` or open any firewall ports — cloudflared connects
    outbound to Cloudflare's edge, so `127.0.0.1` is fine).
@@ -296,6 +296,24 @@ receiving raw 24kHz PCM back — no WAV framing on either side.
 | MAX98357A WS | GPIO 32 |
 | MAX98357A SCK | GPIO 33 |
 | MAX98357A SD | GPIO 34 |
+
+### SD-card song playback
+
+The SD-card file browser (`http://<esp32-ip>:8080/`, see `SD_SERVER_PORT`) can also play MP3s
+straight off the card through the same speaker the voice assistant uses — browse into a folder
+(e.g. `/Naveen/Songs/<album>/`) and click **▶ Play** next to any `.mp3`. That builds a playlist
+from every `.mp3` in that folder (sorted) and starts playing; **Next**/**Stop** controls stay
+visible on every page while something's playing. Tapping the touch pad also stops playback and
+starts listening, same as if you'd said something during idle.
+
+Songs already on the card can also be played by voice: `services/song_index.py` matches spoken
+requests against `data/songs_index.json` (title/mood/genre/keyword/voice-alias metadata for each
+track) and resolves a match to its on-card path, which the backend sends the ESP32 as a
+`{"type": "play_song", "path": "...", "title": "..."}` WS message — the firmware plays it through
+the same `playSongFile()` used by the file browser's ▶ Play button. Say "stop the song" (or similar)
+to send `{"type": "stop_song"}`. **The path is built from the JSON's `album`/`title` fields, so the
+SD card's actual folder/file names must match those strings (and casing) exactly** — see
+`SONGS_ROOT`/`SONGS_INDEX_PATH` env vars in `song_index.py` if your layout differs.
 
 ---
 

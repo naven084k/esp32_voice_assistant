@@ -65,8 +65,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _typing(update)
-    due = check_due_tasks.invoke({})
-    result = list_tasks.invoke({"filter": "pending"})
+    due = await check_due_tasks.ainvoke({})
+    result = await list_tasks.ainvoke({"filter": "pending"})
     text = due if "overdue" in due.lower() else ""
     text += ("\n\n" if text else "") + result
     await update.message.reply_text(text.strip() or "No tasks.")

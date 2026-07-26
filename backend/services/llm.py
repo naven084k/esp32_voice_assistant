@@ -20,6 +20,23 @@ OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 
 current_thread_id: ContextVar[str] = ContextVar("current_thread_id", default="")
 
+# Lets tools (play_radio/stop_radio/download_song) hand a WS message to routers.voice, which
+# delivers it to the ESP32 only after the current turn's TTS reply has fully finished streaming
+# (so "Playing Radio City now" is heard before the station audio cuts in). Plain dict rather than
+# a ContextVar: LangGraph may run each tool call in its own asyncio Task (context copied at
+# creation time), so a ContextVar.set() inside the tool wouldn't propagate back out to
+# routers.voice after it returns.
+_pending_device_actions: dict[str, dict] = {}
+
+
+def queue_device_action(thread_id: str, action: dict) -> None:
+    if thread_id:
+        _pending_device_actions[thread_id] = action
+
+
+def pop_device_action(thread_id: str) -> dict | None:
+    return _pending_device_actions.pop(thread_id, None)
+
 DEFAULT_SYSTEM = """You are ARIA, a voice assistant for the Kumar family in Hyderabad, India. Primary user: Naveen (software engineer). You also speak with children.
 
 RESPONSE STYLE — this is voice output, not text:

@@ -54,14 +54,16 @@ def stop_radio(query: str = "") -> str:
 @tool
 async def download_song(song: str) -> str:
     """Use when the user asks to play a specific song/track (not a radio station) - e.g.
-    'play Tum Hi Ho', 'download and play <song> by <artist>'. Searches for a direct playable
-    audio file link and, if found, queues a device download+play action. Best-effort only -
-    most mainstream/copyrighted songs won't have a freely hosted direct .mp3/.wav link, so this
-    will often fail; tell the user plainly if it does."""
+    'play Tum Hi Ho', 'download and play <song> by <artist>'. Searches for a direct
+    downloadable audio file link (.mp3/.wav) and, if found, queues a device download+play
+    action. The song is also added to the local music index so future requests use play_song
+    instead. Tell the user if no downloadable link was found."""
+    import re
     from services.llm import current_thread_id, queue_device_action
+    from services.song_index import add_song
 
     client = AsyncTavilyClient(api_key=os.environ["TAVILY_API_KEY"])
-    response = await client.search(f"{song} song mp3 direct download link", max_results=5)
+    response = await client.search(f"{song} mp3 download free direct file link", max_results=10)
     results = response.get("results", [])
     audio_url = None
     title = song
@@ -73,8 +75,16 @@ async def download_song(song: str) -> str:
             break
     if not audio_url:
         return f"Couldn't find a direct playable audio link for '{song}'."
+
+    slug = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")
+    filename = f"{slug}.mp3"
+    indexed = add_song(title, filename)
+
     queue_device_action(current_thread_id.get(), {
-        "type": "download_song", "url": audio_url, "title": title,
+        "type": "download_song",
+        "url": audio_url,
+        "title": title,
+        "path": indexed["path"],
     })
     return f"Downloading and playing {title} now."
 
@@ -98,8 +108,31 @@ async def play_song(song: str) -> str:
 
 
 @tool
+async def play_song_queue(query: str, count: int = 5) -> str:
+    """Use when the user asks to play multiple/several songs back-to-back, a playlist, or "some"/
+    "a few" songs matching a mood/genre/language/artist - e.g. 'play some Arijit Singh songs',
+    'play a few romantic songs', 'play some telugu melodies', 'play party songs'. Finds up to
+    `count` matching tracks in the local music library and queues them to auto-play one after
+    another without needing to ask again per song. Use play_song instead for a single specific
+    track request."""
+    from services.llm import current_thread_id, queue_device_action
+    from services.song_index import find_songs
+
+    results = find_songs(query, limit=count)
+    if not results:
+        return f"Couldn't find any songs matching '{query}' in the music library."
+    queue_device_action(current_thread_id.get(), {
+        "type": "play_song_queue",
+        "songs": [{"path": r["path"], "title": r["title"]} for r in results],
+    })
+    names = ", ".join(r["title"] for r in results)
+    return f"Queued {len(results)} songs: {names}."
+
+
+@tool
 def stop_song(query: str = "") -> str:
-    """Use when the user asks to stop the song that's currently playing from the local music library."""
+    """Use when the user asks to stop the song (or song queue/playlist) that's currently playing
+    from the local music library - also clears any remaining queued songs from play_song_queue."""
     from services.llm import current_thread_id, queue_device_action
     queue_device_action(current_thread_id.get(), {"type": "stop_song"})
     return "Stopped the song."
@@ -137,6 +170,7 @@ def build_tools():
         stop_radio,
         download_song,
         play_song,
+        play_song_queue,
         stop_song,
         calculate,
         convert_units,

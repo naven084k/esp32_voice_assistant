@@ -1,27 +1,24 @@
 """
-Voice sketch client — a host-side stand-in for the ESP32 firmware's hands-free voice
-flow (backend/esp32/voice_button.ino), for testing the backend without hardware.
+Voice sketch client — a host-side stand-in for the ESP32 firmware's voice flow
+(backend/esp32/voice_button.ino), for testing the backend without hardware.
 
-Mirrors the firmware's state machine (loop() / vadListenTick() / drainTtsRing() /
-webSocketEvent()) using the host mic/speaker instead of the INMP441/MAX98357A, and
-Enter-key presses instead of the touch pad:
+Uses the host mic/speaker instead of the INMP441/MAX98357A, and Enter-key presses
+instead of the touch pad. Push-to-talk: Enter to start recording, Enter to stop
+and send.
 
-    IDLE --(tap: Enter)--> LISTENING
-    LISTENING --(2s trailing silence after speech)--> send audio --> SPEAKING
-    LISTENING --(10s, no speech at all)--> IDLE (abandoned, nothing sent)
-    LISTENING --(tap)--> IDLE (cancelled, nothing sent)
-    SPEAKING --(reply audio finishes naturally)--> LISTENING (auto-continue, no tap needed)
-    SPEAKING --(tap)--> LISTENING immediately (barge-in; remainder of the old reply is discarded)
+    IDLE --(Enter)--> RECORDING
+    RECORDING --(Enter)--> send audio --> PROCESSING --> SPEAKING
+    SPEAKING --(reply finishes)--> IDLE
+    SPEAKING --(Enter)--> RECORDING (barge-in; remainder of reply is discarded)
     A queued device action after the reply (radio / download_song / play_song) --> MUSIC
-    MUSIC --(tap)--> LISTENING   MUSIC --(finishes naturally)--> IDLE
+    MUSIC --(Enter)--> RECORDING   MUSIC --(finishes naturally)--> IDLE
 
 Usage:
     python tests/sketch_client.py
     python tests/sketch_client.py --list-devices
-    python tests/sketch_client.py --vad-threshold 400   # host mics vary a lot - tune this
     python tests/sketch_client.py --server http://localhost:8000 --voice en-IN-Neural2-B
 
-Press Enter at any time to simulate a touch (start listening / cancel / barge-in / stop music).
+Press Enter at any time: start recording / stop & send / barge-in / stop music.
 
 Requirements: sounddevice, numpy, websockets, httpx (all already in requirements.txt).
 `ffplay` (part of ffmpeg) on PATH is optional - if present, radio streams and downloaded
@@ -48,13 +45,6 @@ import websockets
 
 SAMPLE_RATE = 16000
 TTS_SAMPLE_RATE = 24000  # matches Google Cloud TTS output rate, same as mic_client.py
-
-# Same constants/semantics as backend/esp32/voice_button.ino - kept in sync by hand.
-VAD_RMS_THRESHOLD = 600
-VAD_TRAILING_SILENCE_MS = 2000
-VAD_NO_SPEECH_TIMEOUT_MS = 10000
-RECORD_SECONDS = 15
-RECORD_BUFFER_BYTES = SAMPLE_RATE * 2 * RECORD_SECONDS
 
 SONG_MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024
 
@@ -107,7 +97,7 @@ def to_wav_bytes(pcm: bytes) -> bytes:
 
 class SketchClient:
     """One instance = one ESP32 "boot session": a single persistent WS connection plus
-    the same listening/speaking/music state the firmware tracks across loop() iterations."""
+    the same recording/speaking/music state the firmware tracks across loop() iterations."""
 
     def __init__(self, ws, loop, args):
         self.ws = ws
@@ -115,7 +105,7 @@ class SketchClient:
         self.args = args
 
         self.state = "IDLE"
-        self.listening = False
+        self.recording = False
         self.waiting_for_reply = False
         self.ignore_incoming_audio = False
         self.music_playing = False
@@ -125,11 +115,6 @@ class SketchClient:
         self.mic_q: "queue.Queue[np.ndarray]" = queue.Queue()
         self.rec_chunks: list[bytes] = []
         self.rec_bytes = 0
-        self.vad_speech_started = False
-        self.vad_listen_start = 0.0
-        self.vad_last_speech = 0.0
-        self.vad_frames_over = 0
-        self._last_rms_log = 0.0
 
         self.player_q: "queue.Queue[bytes | None] | None" = None
         self.player_thread: threading.Thread | None = None
@@ -139,7 +124,7 @@ class SketchClient:
     # ---- input plumbing (mic + "touch" key) --------------------------------------------------
 
     def mic_callback(self, indata, _frames, _time_info, _status):
-        if self.listening:
+        if self.recording:
             mono = indata[:, 0] if indata.ndim > 1 else indata.reshape(-1)
             self.mic_q.put(mono.astype(np.int16).copy())
 
@@ -152,116 +137,59 @@ class SketchClient:
                 break
             self.tap_event.set()
 
-    # ---- state transitions (mirror loop()'s tap-handling priority order) ------------------------
+    # ---- state transitions -------------------------------------------------------------------
 
     async def handle_tap(self):
         if self.music_playing:
-            print("[touch] stopping music to listen")
+            print("[touch] stopping music to record")
             self.stop_music()
-            self.start_listening()
+            self.start_recording()
             return
         if self.waiting_for_reply:
-            print("[touch] barge-in - stopping playback to listen again")
+            print("[touch] barge-in - stopping playback to record")
             self.ignore_incoming_audio = True
             self.waiting_for_reply = False
             self.stop_player()
-            # Tells the backend to actually abort the in-flight turn (STT/LLM/still-streaming,
-            # real-time-paced TTS) instead of dutifully finishing it before it can look at anything
-            # we send next - without this, the server has no idea we've stopped listening and the
-            # next request sits queued behind however long the abandoned reply had left to run.
             await self.ws.send(json.dumps({"type": "interrupt"}))
-            self.start_listening()
+            self.start_recording()
             return
-        if self.listening:
-            self.listening = False
-            self.state = "IDLE"
-            print("[touch] cancelled listening, back to idle")
+        if self.recording:
+            self.recording = False
+            if self.rec_bytes > 0:
+                print("<<< sending <<<")
+                await self.send_audio()
+            else:
+                print("  No audio captured, back to idle.")
+                self.state = "IDLE"
             return
         if self.state == "IDLE":
-            print(">>> tap - waking up & listening <<<")
-            self.start_listening()
+            print(">>> recording... press Enter to stop & send <<<")
+            self.start_recording()
 
-    def start_listening(self):
+    def start_recording(self):
         self._drain_mic_queue()
         self.rec_chunks = []
         self.rec_bytes = 0
-        self.vad_speech_started = False
-        self.vad_listen_start = time.monotonic()
-        self.vad_last_speech = 0.0
-        self.vad_frames_over = 0
-        self._last_rms_log = 0.0
-        self.listening = True
-        self.state = "LISTENING"
-        print("Listening...")
+        self.recording = True
+        self.state = "RECORDING"
+        print("Recording... press Enter to stop & send.")
 
     def _drain_mic_queue(self):
-        # Chunks already enqueued before this listen started (leftover backlog from the previous
-        # turn, since production can outpace vad_tick()'s ~20ms poll cadence) must not bleed into
-        # the new recording - otherwise the tail of the last utterance gets spliced onto the front
-        # of this one.
         try:
             while True:
                 self.mic_q.get_nowait()
         except queue.Empty:
             pass
 
-    # ---- VAD (mirrors vadListenTick()) -----------------------------------------------------------
-
-    async def vad_tick(self):
-        # Drain everything currently queued (not just one chunk) so consumption can't lag behind
-        # the mic's production rate and build up a backlog that bleeds into the next turn.
+    def collect_mic_data(self):
         try:
             while True:
                 chunk = self.mic_q.get_nowait()
-                should_send = self._process_chunk(chunk)
-                if should_send:
-                    await self.send_audio()
-                    return
-                if not self.listening:  # VAD timeout fired inside _process_chunk
-                    return
+                data = chunk.tobytes()
+                self.rec_chunks.append(data)
+                self.rec_bytes += len(data)
         except queue.Empty:
             pass
-
-    def _process_chunk(self, chunk: np.ndarray) -> bool:
-        """Returns True if the buffered recording should now be sent."""
-        n = min(len(chunk) * 2, RECORD_BUFFER_BYTES - self.rec_bytes)
-        if n > 0:
-            data = chunk.tobytes()[:n]
-            self.rec_chunks.append(data)
-            self.rec_bytes += len(data)
-
-        rms = float(np.sqrt(np.mean(chunk.astype(np.float64) ** 2))) if len(chunk) else 0.0
-        now = time.monotonic()
-        if now - self._last_rms_log > 0.5:
-            self._last_rms_log = now
-            print(f"  [vad] rms={rms:.0f}" + ("" if self.vad_speech_started else " (waiting for speech)"))
-
-        if rms > self.args.vad_threshold:
-            self.vad_frames_over += 1
-            # Require a few consecutive over-threshold chunks (not just one) before committing to
-            # "speech started" - a laptop mic's noise floor is far spikier than the INMP441's, so a
-            # single stray chunk (a click, a fan gust) would otherwise false-trigger constantly.
-            if not self.vad_speech_started and self.vad_frames_over >= self.args.vad_min_frames:
-                print(f"[VAD] speech detected (rms={rms:.0f})")
-                self.vad_speech_started = True
-            if self.vad_speech_started:
-                self.vad_last_speech = now
-        else:
-            self.vad_frames_over = 0
-
-        hard_cap_hit = self.rec_bytes >= RECORD_BUFFER_BYTES
-        silence_ms = (now - self.vad_last_speech) * 1000 if self.vad_speech_started else 0
-        if hard_cap_hit or (self.vad_speech_started and silence_ms > self.args.vad_silence_ms):
-            self.listening = False
-            print("<<< VAD SEND (hit hard cap)" if hard_cap_hit else "<<< VAD SEND (2s pause)")
-            return True
-
-        if not self.vad_speech_started and (now - self.vad_listen_start) * 1000 > self.args.vad_timeout_ms:
-            self.listening = False
-            self.state = "IDLE"
-            print("<<< VAD TIMEOUT - no speech detected, back to idle")
-
-        return False
 
     async def send_audio(self):
         self.state = "PROCESSING"
@@ -274,20 +202,12 @@ class SketchClient:
             await self.ws.send(wav_bytes[i : i + 4096])
         await self.ws.send(json.dumps({"type": "end"}))
 
-        # listening is already False (set by the caller before send_audio() was awaited), so the
-        # mic callback stopped enqueuing - but flush anyway in case a chunk or two landed in the
-        # queue right at that boundary, so none of it can leak into the *next* listen.
         self._drain_mic_queue()
 
         self.waiting_for_reply = True
-        # Don't touch ignore_incoming_audio here: if this new turn's request goes out before the
-        # *previous* (barge-in-interrupted) turn's audio_end/error has arrived on the wire, resetting
-        # it now would let that old turn's trailing bytes leak into this turn's fresh player_q below,
-        # and then its audio_end would be mistaken for this turn's completion. It's only ever cleared
-        # in recv_loop() when the interrupted turn's own audio_end/error actually shows up.
         self.player_q, self.player_thread = self._start_player()
 
-    # ---- TTS reply playback (mirrors drainTtsRing()) ---------------------------------------------
+    # ---- TTS reply playback ------------------------------------------------------------------
 
     def _start_player(self):
         q: "queue.Queue[bytes | None]" = queue.Queue()
@@ -325,16 +245,15 @@ class SketchClient:
 
     def on_playback_complete(self):
         if self.state != "SPEAKING":
-            return  # already handled elsewhere (barge-in) - don't double-resume
+            return
         self.waiting_for_reply = False
-        print("[reply complete]")
-        # Per the target flow, a finished regular reply re-enters Listening, not Idle.
-        self.start_listening()
+        print("[reply complete] Press Enter to ask again.\n")
+        self.state = "IDLE"
 
-    # ---- device actions: radio / download_song (mirror startRadio()/downloadAndPlaySong()) ------
+    # ---- device actions: radio / download_song / play_song -----------------------------------
 
     def begin_music_state(self, kind: str):
-        self.stop_player()  # abandon any leftover reply audio, same as musicPlaying pre-empting drainTtsRing()
+        self.stop_player()
         self.waiting_for_reply = False
         self.music_playing = True
         self.music_kind = kind
@@ -352,8 +271,6 @@ class SketchClient:
             print("  (ffplay not found on PATH - install ffmpeg to actually hear this stream)")
 
     def play_song(self, path: str, title: str):
-        # The real device reads this straight off its SD card; this host simulator has no SD card
-        # to read from, so it just logs the request instead of actually playing anything.
         self.begin_music_state("song")
         print(f"[song] play_song request: {title} ({path})")
         print("  (no SD card on this host - path logged only, not played)")
@@ -365,9 +282,12 @@ class SketchClient:
         self.music_playing = False
         self.music_kind = None
 
-    async def download_and_play_song(self, url: str, title: str):
+    async def download_and_play_song(self, url: str, title: str, path: str = ""):
         self.begin_music_state("song")
-        print(f"[song] downloading '{title}' from {url}...")
+        if path:
+            print(f"[song] downloading '{title}' from {url} (SD path: {path})")
+        else:
+            print(f"[song] downloading '{title}' from {url}...")
         try:
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
             total = 0
@@ -399,7 +319,7 @@ class SketchClient:
 
         print(f"[song] downloaded {total} bytes, starting playback")
         if not self.music_playing:
-            return  # stopped (touch/barge-in) while the download was in flight
+            return
         if HAS_FFPLAY:
             self.music_proc = subprocess.Popen(
                 ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", tmp.name],
@@ -408,7 +328,7 @@ class SketchClient:
         else:
             print("  (ffplay not found on PATH - install ffmpeg to actually hear this song)")
 
-    # ---- WS receive loop (mirrors webSocketEvent()) ----------------------------------------------
+    # ---- WS receive loop ---------------------------------------------------------------------
 
     async def recv_loop(self):
         async for msg in self.ws:
@@ -423,10 +343,6 @@ class SketchClient:
             data = json.loads(msg)
             t = data.get("type")
 
-            # audio_end/error are the two possible ways a turn ends - one of them always arrives,
-            # so this is the only place ignore_incoming_audio gets reset. Handled before the ignore
-            # gate below (unlike transcript/reply/radio/etc, which belong entirely to the turn we
-            # already walked away from and must never be acted on once ignoring).
             if t == "audio_end":
                 if self.ignore_incoming_audio:
                     self.ignore_incoming_audio = False
@@ -434,9 +350,9 @@ class SketchClient:
                 elif self.player_q:
                     self.player_q.put(None)
                 else:
-                    # Reply had no audio bytes at all (e.g. errored before TTS) - nothing queued to drain.
                     self.waiting_for_reply = False
-                    self.start_listening()
+                    self.state = "IDLE"
+                    print("Press Enter to ask again.\n")
                 continue
             if t == "error":
                 if self.ignore_incoming_audio:
@@ -446,11 +362,11 @@ class SketchClient:
                     print(f"  Error: {data.get('detail')}", file=sys.stderr)
                     self.waiting_for_reply = False
                     self.stop_player()
-                    self.start_listening()
+                    self.state = "IDLE"
                 continue
 
             if self.ignore_incoming_audio:
-                continue  # transcript/reply/device-action for a turn we already barged past
+                continue
 
             if t == "transcript":
                 print(f"\n  You  : {data['text']}")
@@ -459,26 +375,19 @@ class SketchClient:
             elif t == "radio":
                 self.start_radio(data.get("url", ""), data.get("name", ""))
             elif t == "stop_radio":
-                # Only actually in effect if music/radio is still playing on this end - e.g. a
-                # tap-interrupt may have already stopped it locally before this turn's reply (with
-                # its queued stop_radio action, sent only after audio_end per protocol) comes back.
-                # Forcing state to IDLE unconditionally here would stomp "SPEAKING" while the current
-                # reply's TTS audio is still draining, and on_playback_complete()'s guard would then
-                # see state != "SPEAKING" and silently skip resuming listening once playback finishes.
                 if self.music_playing:
                     self.stop_music()
                     self.state = "IDLE"
             elif t == "download_song":
-                asyncio.create_task(self.download_and_play_song(data.get("url", ""), data.get("title", "")))
+                asyncio.create_task(self.download_and_play_song(data.get("url", ""), data.get("title", ""), data.get("path", "")))
             elif t == "play_song":
                 self.play_song(data.get("path", ""), data.get("title", ""))
             elif t == "stop_song":
-                # Same caveat as stop_radio above - only in effect if still playing on this end.
                 if self.music_playing:
                     self.stop_music()
                     self.state = "IDLE"
 
-    # ---- main tick loop (mirrors loop()'s branching order) ---------------------------------------
+    # ---- main tick loop ----------------------------------------------------------------------
 
     async def state_loop(self):
         while True:
@@ -495,8 +404,8 @@ class SketchClient:
                     self.state = "IDLE"
                 continue
 
-            if self.listening:
-                await self.vad_tick()
+            if self.recording:
+                self.collect_mic_data()
 
 
 async def run(args):
@@ -515,7 +424,8 @@ async def run(args):
     async with websockets.connect(uri, max_size=10 * 1024 * 1024) as ws:
         await ws.send(json.dumps({"type": "config", "voice": args.voice, "system_prompt": args.system_prompt}))
         print("Connected.\n")
-        print("Press Enter to simulate a touch: start listening / cancel / barge-in / stop music.")
+        print("Press Enter to start recording. Press Enter again to stop & send.")
+        print("During playback, Enter = barge-in. During music, Enter = stop & record.")
         print("Ctrl+C to quit.\n")
 
         client = SketchClient(ws, loop, args)
@@ -534,7 +444,7 @@ async def run(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Test client mirroring the ESP32 firmware's hands-free voice flow")
+    parser = argparse.ArgumentParser(description="Test client for the ESP32 voice flow (push-to-talk)")
     parser.add_argument("--list-devices", action="store_true")
     parser.add_argument("--input-device", type=int, default=None, metavar="ID")
     parser.add_argument("--output-device", type=int, default=None, metavar="ID")
@@ -543,15 +453,6 @@ def main():
         "You are ARIA, a voice assistant for the Kumar family in Hyderabad, India."
     ))
     parser.add_argument("--server", default="http://localhost:8000", metavar="URL")
-    parser.add_argument("--vad-threshold", type=int, default=VAD_RMS_THRESHOLD, dest="vad_threshold",
-                        help="RMS threshold that counts as speech - host mics vary a lot, tune this by "
-                             "watching the live '[vad] rms=...' log while listening")
-    parser.add_argument("--vad-silence-ms", type=int, default=VAD_TRAILING_SILENCE_MS, dest="vad_silence_ms")
-    parser.add_argument("--vad-timeout-ms", type=int, default=VAD_NO_SPEECH_TIMEOUT_MS, dest="vad_timeout_ms")
-    parser.add_argument("--vad-min-frames", type=int, default=3, dest="vad_min_frames",
-                         help="consecutive over-threshold mic chunks (~16ms each) required before "
-                              "committing to 'speech started' - guards against single noise spikes "
-                              "on a laptop mic's spikier noise floor")
     args = parser.parse_args()
 
     if args.list_devices:

@@ -6,7 +6,8 @@ Flow:
   2. Press Enter again → stop, send to server
   3. Server transcribes, LLM replies, TTS streams back
   4. Audio plays chunk-by-chunk as it arrives (no wait for full response)
-  5. Repeat (Ctrl+C to quit)
+  5. Device actions (radio / play_song / download_song) play via ffplay if available
+  6. Repeat (Ctrl+C to quit)
 
 Usage:
     python tests/mic_client.py
@@ -15,22 +16,30 @@ Usage:
     python tests/mic_client.py --voice nova --system-prompt "You are a pirate."
 
 Requirements:
-    pip install sounddevice numpy miniaudio websockets
+    pip install sounddevice numpy websockets httpx
+    ffplay (ffmpeg) on PATH is optional — needed to actually hear radio/song playback.
 """
 import argparse
 import asyncio
 import io
 import json
 import queue
+import shutil
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.request
 import wave
 
+import httpx
 import numpy as np
 import sounddevice as sd
 import websockets
+
+SONG_MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024
+HAS_FFPLAY = shutil.which("ffplay") is not None
 
 SAMPLE_RATE = 16000
 DTYPE = "int16"
@@ -146,6 +155,80 @@ def check_server(base_url: str):
         sys.exit(1)
 
 
+# ─── Device actions: radio / play_song / download_song ────────────────────────
+
+music_proc: subprocess.Popen | None = None
+
+
+def stop_music():
+    global music_proc
+    if music_proc and music_proc.poll() is None:
+        music_proc.terminate()
+    music_proc = None
+
+
+def start_radio(url: str, name: str):
+    global music_proc
+    stop_music()
+    print(f"  [radio] playing {name} ({url})")
+    if HAS_FFPLAY:
+        music_proc = subprocess.Popen(
+            ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", url],
+            stdin=subprocess.DEVNULL,
+        )
+    else:
+        print("  (ffplay not found on PATH — install ffmpeg to hear this stream)")
+
+
+def play_song_local(path: str, title: str):
+    global music_proc
+    stop_music()
+    print(f"  [song] play_song: {title} ({path})")
+    print("  (no SD card on this host — path logged only, not played)")
+
+
+async def download_and_play_song(url: str, title: str, path: str = ""):
+    global music_proc
+    stop_music()
+    if path:
+        print(f"  [song] downloading '{title}' from {url} (SD path: {path})")
+    else:
+        print(f"  [song] downloading '{title}' from {url}...")
+    try:
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+        total = 0
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            async with client.stream("GET", url) as resp:
+                if resp.status_code != 200:
+                    print(f"  [song] download failed: HTTP {resp.status_code}")
+                    tmp.close()
+                    return
+                async for part in resp.aiter_bytes():
+                    tmp.write(part)
+                    total += len(part)
+                    if total > SONG_MAX_DOWNLOAD_BYTES:
+                        print("  [song] download exceeded max size — aborting")
+                        tmp.close()
+                        return
+        tmp.close()
+    except Exception as e:
+        print(f"  [song] download failed: {e}")
+        return
+
+    if total == 0:
+        print("  [song] download produced no data — aborting playback")
+        return
+
+    print(f"  [song] downloaded {total} bytes, starting playback")
+    if HAS_FFPLAY:
+        music_proc = subprocess.Popen(
+            ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", tmp.name],
+            stdin=subprocess.DEVNULL,
+        )
+    else:
+        print("  (ffplay not found on PATH — install ffmpeg to hear this song)")
+
+
 # ─── Main loop ────────────────────────────────────────────────────────────────
 
 async def run(voice: str, system_prompt: str, input_device, output_device,
@@ -157,6 +240,7 @@ async def run(voice: str, system_prompt: str, input_device, output_device,
     out_name = sd.query_devices(output_device if output_device is not None else sd.default.device[1])["name"]
     print(f"Mic     : {in_name}")
     print(f"Speaker : {out_name}")
+    print(f"ffplay  : {'found' if HAS_FFPLAY else 'not found (radio/song playback will be logged only)'}")
     print(f"Connecting to {uri} ...")
 
     async with websockets.connect(uri, max_size=10 * 1024 * 1024) as ws:
@@ -191,6 +275,9 @@ async def run(voice: str, system_prompt: str, input_device, output_device,
             chunk_q, player_thread = start_streaming_player(output_device)
             playing = False
 
+            # Stop any music from a previous turn before playing the new reply
+            stop_music()
+
             while True:
                 msg = await ws.recv()
                 if isinstance(msg, bytes):
@@ -198,22 +285,34 @@ async def run(voice: str, system_prompt: str, input_device, output_device,
                         elapsed = time.monotonic() - sent_at
                         print(f"  Playing response... (first audio after {elapsed:.2f}s)")
                         playing = True
-                    chunk_q.put(msg)          # decoded + played immediately
+                    chunk_q.put(msg)
                 else:
                     data = json.loads(msg)
-                    if data["type"] == "transcript":
+                    t = data.get("type")
+                    if t == "transcript":
                         print(f"\n  You     : {data['text']}")
-                    elif data["type"] == "reply":
+                    elif t == "reply":
                         print(f"  Bot     : {data['text']}")
-                    elif data["type"] == "audio_end":
-                        chunk_q.put(None)     # signal player to finish
+                    elif t == "audio_end":
+                        chunk_q.put(None)
                         elapsed = time.monotonic() - sent_at
                         print(f"  Response complete in {elapsed:.2f}s")
                         break
-                    elif data["type"] == "error":
+                    elif t == "error":
                         chunk_q.put(None)
                         print(f"  Error   : {data['detail']}", file=sys.stderr)
                         break
+                    elif t == "radio":
+                        start_radio(data.get("url", ""), data.get("name", ""))
+                    elif t == "stop_radio":
+                        stop_music()
+                    elif t == "download_song":
+                        asyncio.create_task(download_and_play_song(
+                            data.get("url", ""), data.get("title", ""), data.get("path", "")))
+                    elif t == "play_song":
+                        play_song_local(data.get("path", ""), data.get("title", ""))
+                    elif t == "stop_song":
+                        stop_music()
 
             # Wait for player to drain remaining samples
             await loop.run_in_executor(None, player_thread.join, 30)

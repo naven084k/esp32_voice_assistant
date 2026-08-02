@@ -18,6 +18,7 @@
 #include <Adafruit_SSD1306.h>
 // ^ Libraries: "Adafruit SSD1306" + "Adafruit GFX Library" (Adafruit BusIO comes along
 //   as a dependency) — status OLED, see the "OLED status display" section below.
+#include <HTTPClient.h>   // chunked download of songs from URLs (download_song device action)
 #include <time.h>   // NTP-synced clock for the idle screen's occasional time display
 #include <math.h>   // sinf/lroundf for the idle face's breathing animation
 
@@ -119,10 +120,55 @@ bool ignoreIncomingAudio = false;
 // own TTS ring buffer may still have seconds of that turn's "Playing X now" confirmation audio
 // left to play out. loop() starts g_pendingSong* once waitingForReply naturally clears.
 bool     musicPlaying     = false;
+// Set/cleared only by the /music/pause web control (see handleMusicPauseToggle()). While true,
+// musicLoop() early-returns every iteration - no decode step, no I2S write - freezing playback
+// exactly where it was; false resumes it on the very next loop() iteration. Always reset to
+// false on a fresh playSongFile() so it never carries over from one track to the next.
+bool     musicPaused      = false;
 bool     g_songPending    = false;
 String   g_pendingSongPath;
 String   g_pendingSongTitle;
 String   g_currentTrackName;
+String   g_currentSongPath;   // set by playSongFile() - lets an interruption remember what to resume
+
+// Set when a touch interrupts a playing song to listen (see loop()'s musicPlaying tap handler).
+// Cleared the moment real speech is heard (a non-empty "transcript" WS message - see
+// webSocketEvent()), so a genuine question/request is never fought with the old song resuming.
+// If it's still true once the turn concludes in an "error" (STT heard nothing at all), that means
+// the interruption didn't produce a question, so webSocketEvent()'s "error" handler resumes
+// g_interruptedSong* instead of showing an error for what wasn't really a failure.
+bool     g_songWasInterrupted = false;
+String   g_interruptedSongPath;
+String   g_interruptedSongTitle;
+
+// Download-then-play state: when the backend sends a "download_song" action the ESP32 downloads
+// the file from the URL to the SD card, then plays it locally. Like g_songPending, the actual
+// download is deferred to loop() so it doesn't block the WS event handler mid-callback.
+bool     g_downloadPending = false;
+String   g_downloadUrl;
+String   g_downloadPath;      // SD card path, e.g. "/Naveen/songs/Downloads/slug.mp3"
+String   g_downloadTitle;
+
+// Up-next queue for playlist-style requests (backend's "play_song_queue" action, e.g. "play some
+// Arijit Singh songs") - the first song is started the normal g_pendingSong* way, the rest sit
+// here until musicLoop() sees the current track finish on its own and calls dequeueNextSong().
+// A fresh play_song/play_song_queue/download_song request replaces whatever's still queued here
+// (see their webSocketEvent() handlers); an explicit stop_song clears it too. Deliberately NOT
+// cleared when a touch interrupts a song to ask a question, or when that interruption resumes the
+// song - both keep the same playlist session going.
+#define SONG_QUEUE_MAX 20
+String   g_songQueuePath[SONG_QUEUE_MAX];
+String   g_songQueueTitle[SONG_QUEUE_MAX];
+int      g_songQueueCount = 0;   // number of valid entries at the front of the arrays above
+
+// Playback history for the /music page's "Prev" control - every song advanceToNextSong() leaves
+// behind (queue auto-advance or the /music/next control) gets pushed here so it can be gone back
+// to. Plain append/pop-from-the-end stack (no shifting needed, unlike the queue's FIFO arrays).
+// Cleared alongside the queue on a fresh play_song/play_song_queue/download_song/stop_song.
+#define SONG_HISTORY_MAX 20
+String   g_songHistoryPath[SONG_HISTORY_MAX];
+String   g_songHistoryTitle[SONG_HISTORY_MAX];
+int      g_songHistoryCount = 0;
 
 bool     touchLastState = false;   // last-seen digitalRead(TOUCH_PIN), for rising-edge detection
 uint32_t touchLastTapMs = 0;       // millis() of the last recognized tap, for debouncing
@@ -141,6 +187,12 @@ String    g_vpsHost;
 // setupServer since this one runs during normal STA-mode operation, not just the AP-mode portal.
 WebServer fileServer(SD_SERVER_PORT);
 bool      sdReady = false;
+
+// Set by handleFileUpload() at UPLOAD_FILE_START and read again at UPLOAD_FILE_WRITE/END/ABORTED -
+// WebServer only ever runs one upload at a time on a given instance, so a single pair of globals
+// (rather than something keyed per-request) is enough here.
+File      g_uploadFile;
+String    g_uploadPath;
 
 // Ring buffer for incoming TTS audio. WStype_BIN just memcpy's into this (microsecond-scale)
 // instead of blocking on I2S playback directly - playback is drained a small slice at a time
@@ -310,6 +362,26 @@ void drawWaveformIcon(int16_t cx, int16_t cy) {
   }
 }
 
+// Music-playing icon: a 7-bar equalizer with each bar bouncing to its own out-of-phase pattern
+// (unlike drawWaveformIcon's single 5-bar shape) so it reads as a livelier "now playing" meter.
+// Driven by g_animFrame, same as every other state's icon animation.
+void drawMusicBarsIcon(int16_t cx, int16_t cy) {
+  static const uint8_t heights[8][7] = {
+    { 5, 14,  8, 20, 10, 16,  6}, {10,  6, 16, 12, 20,  8, 14},
+    {16, 10,  6,  8, 14, 18,  9}, { 8, 18, 12,  5, 16, 10, 20},
+    { 6,  9, 20, 14,  8, 12, 16}, {14, 16,  9, 18,  6, 20,  8},
+    {20,  8, 14,  6, 12,  9, 18}, { 9, 12,  8, 16, 18,  6, 10},
+  };
+  static const uint8_t flat[7] = {6, 6, 6, 6, 6, 6, 6};   // paused: bars hold level, don't bounce
+  const uint8_t* h = musicPaused ? flat : heights[g_animFrame % 8];
+  int16_t barW = 5, gap = 3, n = 7;
+  int16_t startX = cx - (n * barW + (n - 1) * gap) / 2;
+  for (int i = 0; i < n; i++) {
+    int16_t x = startX + i * (barW + gap);
+    display.fillRect(x, cy - h[i] / 2, barW, h[i], SSD1306_WHITE);
+  }
+}
+
 void drawHourglassIcon(int16_t cx, int16_t cy) {
   int16_t w = 14, h = 20;
   int16_t left = cx - w / 2, right = cx + w / 2, top = cy - h / 2, bottom = cy + h / 2;
@@ -363,6 +435,28 @@ void drawLabel(const char* text) {
   display.print(text);
 }
 
+// Marquee-scrolls `text` across the subtitle row when it's too wide to fit; centers it and
+// prints it plainly otherwise. Used for the current song title on STATE_MUSIC, which (unlike
+// g_subtitle) isn't truncated to 21 chars. Scroll position is driven by g_animFrame, so it
+// advances at the same cadence as that state's icon animation (see tickDisplay()).
+void drawScrollingText(const String& text, int16_t y) {
+  display.setTextSize(1);
+  int16_t textW = text.length() * 6;
+  if (textW <= 128) {
+    display.setCursor((128 - textW) / 2, y);
+    display.print(text);
+    return;
+  }
+  String padded = text + "   ";   // gap before the loop repeats
+  int16_t fullW = padded.length() * 6;
+  int16_t offset = (g_animFrame * 4) % fullW;   // scroll speed: 4px per animation tick
+  int16_t x = -offset;
+  display.setCursor(x, y);
+  display.print(padded);
+  display.setCursor(x + fullW, y);
+  display.print(padded);   // second copy so the wraparound looks continuous
+}
+
 void drawFrame() {
   display.clearDisplay();
   display.drawFastHLine(0, 11, 128, SSD1306_WHITE);
@@ -388,11 +482,25 @@ void drawFrame() {
       drawLabel("SPEAKING");
       drawEmojiSmiley(10, 6, 6);   // top-left accent, mirroring the WiFi icon's top-right corner
       break;
-    case STATE_MUSIC:      drawSpeakerIcon(ICON_CX, ICON_CY);   drawLabel("PLAYING");    break;
+    case STATE_MUSIC: {
+      drawMusicBarsIcon(ICON_CX, ICON_CY);
+      char label[16];
+      if (musicPaused) {
+        snprintf(label, sizeof(label), "PAUSED");
+      } else if (g_songQueueCount > 0) {
+        snprintf(label, sizeof(label), "PLAYING +%d", g_songQueueCount);   // songs still queued up next
+      } else {
+        snprintf(label, sizeof(label), "PLAYING");
+      }
+      drawLabel(label);
+      break;
+    }
     case STATE_ERROR:      drawErrorIcon(ICON_CX, ICON_CY);     drawLabel(errorLabel()); break;
   }
 
-  if (g_subtitle[0] != '\0') {
+  if (g_state == STATE_MUSIC) {
+    drawScrollingText(g_currentTrackName, SUBTITLE_Y);   // full title, not the 21-char g_subtitle
+  } else if (g_subtitle[0] != '\0') {
     display.setTextSize(1);
     display.setCursor(0, SUBTITLE_Y);
     display.print(g_subtitle);
@@ -518,10 +626,18 @@ void setWifiConnected(bool connected) {
 void tickDisplay() {
   uint32_t now = millis();
   if (g_state == STATE_ERROR) return;
-  // Skip animation-driven display.display() calls during the audio pipeline's active phases -
-  // a ~20-25ms SSD1306 I2C flush every 300ms would starve I2S and glitch the amp throughout
-  // the reply. The static icons painted by the state-transition updateDisplay() are enough.
-  if (g_state == STATE_PROCESSING || g_state == STATE_SPEAKING || g_state == STATE_MUSIC) return;
+  // Skip animation-driven display.display() calls during TTS's active phase - a ~20-25ms SSD1306
+  // I2C flush every 300ms would starve I2S and glitch the amp throughout the reply. The static
+  // icon painted by the state-transition updateDisplay() is enough.
+  //
+  // STATE_MUSIC is deliberately NOT skipped here (unlike PROCESSING/SPEAKING) so the equalizer
+  // bars and song-title scroll animate during playback: drainMusicRing() only ever writes one
+  // ~11.6ms slice per loop() iteration, and MUSIC_RING_BYTES (~0.37s) has enough headroom to
+  // absorb an occasional 20-25ms flush every 300ms without underrunning, since the decoder/SD
+  // read side normally fills the ring faster than realtime (see MUSIC_RING_BYTES's comment).
+  // Verify on real hardware if songs start crackling after this change - if so, revert to
+  // skipping like the other two states and drop the animation instead.
+  if (g_state == STATE_PROCESSING || g_state == STATE_SPEAKING) return;
 
   if (g_state == STATE_IDLE) {
     if (g_moodUntilMs != 0 && now >= g_moodUntilMs) {
@@ -835,6 +951,11 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
         const char* heard = (const char*)(doc["text"] | "");
         Serial.printf("YOU SAID:\n  \"%s\"\n", heard);
         updateDisplay(STATE_PROCESSING, heard);   // STT done, LLM/TTS still pending
+        if (heard[0] != '\0') {
+          // Real speech was heard, so a normal reply is coming - don't auto-resume whatever song
+          // this listen may have interrupted (see g_songWasInterrupted's comment above).
+          g_songWasInterrupted = false;
+        }
       } else if (t == "reply") {
         Serial.printf("ASSISTANT:\n  \"%s\"\n", (const char*)(doc["text"] | ""));
       } else if (t == "audio_end") {
@@ -861,13 +982,25 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
           fadeInSamplesRemaining = 0;
           pendingSpeakingDisplay = false;
           ttsHead = ttsTail = ttsFill = 0;   // discard any partial audio for the failed turn
-          setDisplayError(ERR_API);
-          Serial.printf("[WS] error: %s\n", (const char*)(doc["detail"] | ""));
+          if (g_songWasInterrupted) {
+            // Nothing came of interrupting the song to listen (no speech heard this turn) - pick
+            // back up where we left off rather than showing an error for what wasn't a real failure.
+            g_songWasInterrupted = false;
+            Serial.println("[WS] no question asked - resuming interrupted song");
+            g_pendingSongPath  = g_interruptedSongPath;
+            g_pendingSongTitle = g_interruptedSongTitle;
+            g_songPending = true;
+          } else {
+            setDisplayError(ERR_API);
+            Serial.printf("[WS] error: %s\n", (const char*)(doc["detail"] | ""));
+          }
         }
       } else if (t == "play_song") {
         String path  = (const char*)(doc["path"]  | "");
         String title = (const char*)(doc["title"] | "");
         if (sdReady && path.length() && isMp3(path)) {
+          g_songQueueCount = 0;     // fresh single-song request replaces any playlist still queued
+          g_songHistoryCount = 0;   // ...and its "prev" history too
           // Deferred to loop() rather than started here - see g_songPending's comment above.
           g_pendingSongPath  = path;
           g_pendingSongTitle = title;
@@ -877,8 +1010,52 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
           Serial.printf("[WS] play_song ignored (sdReady=%s, path=\"%s\")\n",
                         sdReady ? "true" : "false", path.c_str());
         }
+      } else if (t == "play_song_queue") {
+        // Playlist-style request (backend's play_song_queue tool, e.g. "play some Arijit Singh
+        // songs"): first entry starts the normal deferred way, the rest fill g_songQueue* for
+        // musicLoop() to advance through automatically as each track finishes on its own.
+        JsonArray songs = doc["songs"].as<JsonArray>();
+        g_songQueueCount = 0;     // fresh playlist request replaces any playlist still queued
+        g_songHistoryCount = 0;   // ...and its "prev" history too
+        bool first = true;
+        for (JsonVariant sv : songs) {
+          String path  = sv["path"]  | "";
+          String title = sv["title"] | "";
+          if (!sdReady || !path.length() || !isMp3(path)) continue;
+          if (first) {
+            g_pendingSongPath  = path;
+            g_pendingSongTitle = title;
+            g_songPending = true;
+            first = false;
+          } else if (g_songQueueCount < SONG_QUEUE_MAX) {
+            g_songQueuePath[g_songQueueCount]  = path;
+            g_songQueueTitle[g_songQueueCount] = title;
+            g_songQueueCount++;
+          }
+        }
+        Serial.printf("[WS] play_song_queue: %d song(s) queued (sdReady=%s)\n",
+                      (first ? 0 : 1) + g_songQueueCount, sdReady ? "true" : "false");
+      } else if (t == "download_song") {
+        String url   = (const char*)(doc["url"]   | "");
+        String path  = (const char*)(doc["path"]  | "");
+        String title = (const char*)(doc["title"] | "");
+        if (sdReady && url.length() && path.length()) {
+          g_songQueueCount   = 0;   // fresh single-song request replaces any playlist still queued
+          g_songHistoryCount = 0;   // ...and its "prev" history too
+          g_downloadUrl      = url;
+          g_downloadPath     = path;
+          g_downloadTitle    = title;
+          g_downloadPending  = true;
+          Serial.printf("[WS] download_song queued: %s -> %s\n", title.c_str(), path.c_str());
+        } else {
+          Serial.printf("[WS] download_song ignored (sdReady=%s, url=%d, path=%d)\n",
+                        sdReady ? "true" : "false", url.length(), path.length());
+        }
       } else if (t == "stop_song") {
         g_songPending = false;
+        g_downloadPending = false;
+        g_songQueueCount = 0;     // explicit stop cancels the rest of the playlist too
+        g_songHistoryCount = 0;   // ...and its "prev" history
         stopMusic();
       }
       break;
@@ -1103,7 +1280,7 @@ bool connectWifi(const char* ssid, const char* pass, uint32_t timeoutMs) {
   return true;
 }
 
-// ---- SD-card file browser (read-only: list + download) -----------------------------------
+// ---- SD-card file browser (list + download + upload) --------------------------------------
 // Runs on fileServer (port SD_SERVER_PORT) once WiFi is up, alongside the voice pipeline.
 // Reuses the same list+download design already proven in sd_card_info.ino, just wired to the
 // shared g_wifiSsid/WebServer pattern instead of that sketch's own hardcoded WiFi/setup() loop.
@@ -1143,12 +1320,16 @@ void handleSdRoot() {
     return;
   }
   String path = fileServer.hasArg("path") ? fileServer.arg("path") : "/";
-  String html = "<html><body><h3>SD Card: " + path + "</h3>";
+  String html = "<html><body><h3>SD Card: " + path + "</h3><p><a href=\"/music\">Now Playing / Queue</a></p>";
   if (path != "/") {
     int lastSlash = path.lastIndexOf('/');
     String parent = (lastSlash <= 0) ? "/" : path.substring(0, lastSlash);
     html += "<p><a href=\"/?path=" + parent + "\">.. (up)</a></p>";
   }
+  // Uploads land in whatever folder is currently being browsed - handleFileUpload() reads the
+  // same ?path= query param off this form's action URL.
+  html += "<form method=\"POST\" action=\"/upload?path=" + path + "\" enctype=\"multipart/form-data\">"
+          "<input type=\"file\" name=\"file\"> <input type=\"submit\" value=\"Upload\"></form>";
   html += "<ul>";
   listSdDir(path, html);
   html += "</ul></body></html>";
@@ -1174,6 +1355,114 @@ void handleSdDownload() {
   fileServer.sendHeader("Content-Disposition", "attachment; filename=\"" + filename + "\"");
   fileServer.streamFile(file, "application/octet-stream");
   file.close();
+}
+
+// Streaming upload callback for POST /upload (see handleSdRoot()'s <form>) - the WebServer
+// library calls this repeatedly as multipart body chunks arrive, then calls the plain handler
+// registered alongside it (handleUploadDone below) once the whole request has been read. Mirrors
+// handleSdDownload()'s blocks-loop()-for-the-duration tradeoff, just in the other direction.
+void handleFileUpload() {
+  HTTPUpload& upload = fileServer.upload();
+  if (upload.status == UPLOAD_FILE_START) {
+    if (!sdReady) return;
+    String dir = fileServer.hasArg("path") ? fileServer.arg("path") : "/";
+    if (!dir.endsWith("/")) dir += "/";
+    g_uploadPath = dir + upload.filename;
+    Serial.printf("[SD] upload starting: %s\n", g_uploadPath.c_str());
+    g_uploadFile = SD_MMC.open(g_uploadPath, FILE_WRITE);
+    if (!g_uploadFile) Serial.printf("[SD] failed to open %s for writing\n", g_uploadPath.c_str());
+  } else if (upload.status == UPLOAD_FILE_WRITE) {
+    if (g_uploadFile) g_uploadFile.write(upload.buf, upload.currentSize);
+  } else if (upload.status == UPLOAD_FILE_END) {
+    if (g_uploadFile) {
+      g_uploadFile.close();
+      Serial.printf("[SD] upload complete: %s (%u bytes)\n", g_uploadPath.c_str(), upload.totalSize);
+    }
+  } else if (upload.status == UPLOAD_FILE_ABORTED) {
+    if (g_uploadFile) g_uploadFile.close();
+    if (sdReady && g_uploadPath.length()) SD_MMC.remove(g_uploadPath);   // don't leave a partial file behind
+    Serial.println("[SD] upload aborted");
+  }
+}
+
+// Called once handleFileUpload() above has finished consuming the whole request body - redirects
+// back to the folder just uploaded into so the new file shows up in the listing.
+void handleUploadDone() {
+  String dir = fileServer.hasArg("path") ? fileServer.arg("path") : "/";
+  fileServer.sendHeader("Location", "/?path=" + dir);
+  fileServer.send(303);
+}
+
+// ---- /music page: now-playing + up-next queue, with prev/pause/next/stop controls -----------
+// Same fileServer/port as the SD browser above, just a different route. Controls are plain GET
+// links (like handleSdDownload()'s file links) rather than a JS-driven player - each one performs
+// its action then 303-redirects back to /music so a page reload always reflects the new state.
+// The music-changing functions themselves (advanceToNextSong(), dequeueNextSong(), etc.) live
+// down in the "Music playback" section further below; forward-calling them here is fine, same as
+// webSocketEvent() forward-calling playSongFile()/downloadAndPlaySong() earlier in the file.
+void handleMusicPage() {
+  String html = "<html><head><meta http-equiv=\"refresh\" content=\"5\"></head><body>";
+  html += "<h3>Now Playing</h3>";
+  if (musicPlaying) {
+    html += "<p>" + g_currentTrackName + (musicPaused ? " (paused)" : "") + "</p>";
+  } else {
+    html += "<p><i>(nothing playing)</i></p>";
+  }
+  html += "<p>"
+          "<a href=\"/music/prev\">&laquo; Prev</a> &nbsp; "
+          "<a href=\"/music/pause\">" + String(musicPaused ? "Resume" : "Pause") + "</a> &nbsp; "
+          "<a href=\"/music/next\">Next &raquo;</a> &nbsp; "
+          "<a href=\"/music/stop\">Stop</a>"
+          "</p>";
+  html += "<h3>Up Next</h3><ol>";
+  if (g_songQueueCount == 0) {
+    html += "<li><i>(queue empty)</i></li>";
+  } else {
+    for (int i = 0; i < g_songQueueCount; i++) html += "<li>" + g_songQueueTitle[i] + "</li>";
+  }
+  html += "</ol><p><a href=\"/\">SD file browser</a></p></body></html>";
+  fileServer.send(200, "text/html", html);
+}
+
+void handleMusicNext() {
+  if (musicPlaying) advanceToNextSong();
+  else if (g_songQueueCount > 0) dequeueNextSong();   // nothing was playing but songs are waiting
+  fileServer.sendHeader("Location", "/music");
+  fileServer.send(303);
+}
+
+void handleMusicPrev() {
+  if (g_songHistoryCount > 0) {
+    // Put whatever's currently playing back at the front of the queue so "Next" can return to
+    // it, then start the most recent history entry the same deferred way play_song does.
+    if (musicPlaying) {
+      unshiftQueue(g_currentSongPath, g_currentTrackName);
+      stopMusic();
+    }
+    String path, title;
+    popHistory(path, title);
+    g_pendingSongPath  = path;
+    g_pendingSongTitle = title;
+    g_songPending = true;
+  }
+  fileServer.sendHeader("Location", "/music");
+  fileServer.send(303);
+}
+
+void handleMusicPauseToggle() {
+  if (musicPlaying) musicPaused = !musicPaused;
+  fileServer.sendHeader("Location", "/music");
+  fileServer.send(303);
+}
+
+void handleMusicStop() {
+  g_songPending = false;
+  g_downloadPending = false;
+  g_songQueueCount = 0;
+  g_songHistoryCount = 0;
+  stopMusic();
+  fileServer.sendHeader("Location", "/music");
+  fileServer.send(303);
 }
 
 // Shown for a few seconds right after the file browser comes up, since Serial (where this URL
@@ -1212,6 +1501,12 @@ void initSdFileServer() {
 
   fileServer.on("/", HTTP_GET, handleSdRoot);
   fileServer.on("/download", HTTP_GET, handleSdDownload);
+  fileServer.on("/upload", HTTP_POST, handleUploadDone, handleFileUpload);
+  fileServer.on("/music", HTTP_GET, handleMusicPage);
+  fileServer.on("/music/next", HTTP_GET, handleMusicNext);
+  fileServer.on("/music/prev", HTTP_GET, handleMusicPrev);
+  fileServer.on("/music/pause", HTTP_GET, handleMusicPauseToggle);
+  fileServer.on("/music/stop", HTTP_GET, handleMusicStop);
   fileServer.begin();
   String ip = WiFi.localIP().toString();
   Serial.printf("[SD] file browser up at http://%s:%d/ (sdReady=%s)\n",
@@ -1224,15 +1519,29 @@ void initSdFileServer() {
 // Reuses the exact I2S_speaker instance drainTtsRing() drives for TTS, reconfigured to the
 // song's own sample rate while playing - see loop()'s musicPlaying/waitingForReply gating, which
 // keeps this and TTS playback from ever running at the same time, so there's no contention over
-// the shared peripheral. ConsumeSample() batches decoded samples into a small stack buffer and
-// only calls I2S_speaker.write() once it's full (I2S has real per-call overhead - writing one
-// sample at a time would starve throughput), which is enough buffering here: unlike TTS's
-// network-fed ring buffer, an MP3 file decodes from the local SD card at whatever pace loop()
-// calls musicLoop(), so there's no separate producer/consumer split to manage.
+// the shared peripheral.
+//
+// ConsumeSample() must never block: AudioGeneratorMP3::loop() can push an entire decoded MP3
+// frame's samples through it synchronously in one call, so a version that wrote straight to I2S
+// per small batch (an earlier iteration of this code) could rack up several back-to-back blocking
+// I2S writes inside a single musicLoop() call - starving loop() of the chance to notice a touch
+// tap or service webSocket.loop() for that whole stretch (this is exactly the touch-doesn't-stop-
+// the-song bug it caused). So instead ConsumeSample() only does a fast, non-blocking memcpy into
+// musicRing, mirroring pushTtsBytes()/ttsRing; the actual paced I2S_speaker.write() happens once
+// per musicLoop() iteration in drainMusicRing() below, bounded to one ~11.6ms slice regardless of
+// how much the decoder just produced - same bound drainTtsRing() already guarantees for TTS.
+#define MUSIC_RING_BYTES 65536   // 64KiB: ~0.37s of buffered 44.1kHz/16-bit stereo audio (PSRAM) -
+                                 // headroom for the decoder/SD-read side to burst ahead of playback
+uint8_t* musicRing = nullptr;
+size_t   musicHead = 0;   // next write index (producer: I2SMusicOutput::ConsumeSample)
+size_t   musicTail = 0;   // next read index  (consumer: drainMusicRing)
+size_t   musicFill = 0;   // bytes currently buffered
+bool     musicDecoderDone = false;   // true once mp3Decoder->loop() returns false (EOF/error)
+
 class I2SMusicOutput : public AudioOutput {
  public:
   bool begin() override { return true; }
-  bool stop() override { flush(); return true; }
+  bool stop() override { return true; }
   bool SetRate(int hz) override {
     AudioOutput::SetRate(hz);
     I2S_speaker.end();
@@ -1241,20 +1550,25 @@ class I2SMusicOutput : public AudioOutput {
     return true;
   }
   bool ConsumeSample(int16_t sample[2]) override {
-    buf[fill * 2]     = sample[0];
-    buf[fill * 2 + 1] = sample[1];
-    fill++;
-    if (fill == kFrames) flush();
+    if (!musicRing || musicFill + 4 > MUSIC_RING_BYTES) return false;   // ring full - decoder retries this sample
+    // Same g_volumePercent scaling drainTtsRing() applies to TTS - without this, music plays at
+    // unity gain while TTS plays boosted (default 150%), so a song sounds quieter by comparison.
+    int16_t scaled[2];
+    for (int ch = 0; ch < 2; ch++) {
+      int32_t s = ((int32_t)sample[ch] * g_volumePercent) / 100;
+      if (s > 32767) s = 32767; else if (s < -32768) s = -32768;
+      scaled[ch] = (int16_t)s;
+    }
+    size_t firstPart = MUSIC_RING_BYTES - musicHead;
+    if (firstPart >= 4) {
+      memcpy(musicRing + musicHead, scaled, 4);
+    } else {
+      memcpy(musicRing + musicHead, scaled, firstPart);
+      memcpy(musicRing, (uint8_t*)scaled + firstPart, 4 - firstPart);
+    }
+    musicHead = (musicHead + 4) % MUSIC_RING_BYTES;
+    musicFill += 4;
     return true;
-  }
- private:
-  static const size_t kFrames = 512;   // ~11.6ms at 44.1kHz - matches drainTtsRing()'s slice size
-  int16_t buf[kFrames * 2];
-  size_t  fill = 0;
-  void flush() {
-    if (fill == 0) return;
-    I2S_speaker.write((uint8_t*)buf, fill * 4);
-    fill = 0;
   }
 };
 
@@ -1280,19 +1594,97 @@ void stopMusic() {
   if (!musicPlaying) return;
   if (mp3Decoder) { mp3Decoder->stop(); delete mp3Decoder; mp3Decoder = nullptr; }
   if (mp3Source)  { mp3Source->close(); delete mp3Source;  mp3Source  = nullptr; }
+  musicHead = musicTail = musicFill = 0;   // discard any buffered-but-unplayed audio
+  musicDecoderDone = false;
   musicPlaying = false;
   restoreSpeakerForTts();
   updateDisplay(STATE_IDLE);
   Serial.println("[music] stopped");
 }
 
+// Downloads an MP3 from `url` to `sdPath` on the SD card in 4KB chunks, then hands off to
+// playSongFile() for playback. Creates the parent directory if it doesn't exist. Blocks loop()
+// for the duration of the download (same tradeoff as handleSdDownload / recordUntilStop).
+void downloadAndPlaySong(const String& url, const String& sdPath, const String& title) {
+  if (!sdReady) { Serial.println("[dl] SD card not ready"); return; }
+
+  // Ensure the parent directory exists (e.g. /Naveen/songs/Downloads/)
+  int lastSlash = sdPath.lastIndexOf('/');
+  if (lastSlash > 0) {
+    String dir = sdPath.substring(0, lastSlash);
+    SD_MMC.mkdir(dir);
+  }
+
+  // Skip download if the file already exists on the SD card
+  if (SD_MMC.exists(sdPath)) {
+    Serial.printf("[dl] already on SD card: %s - playing directly\n", sdPath.c_str());
+    playSongFile(sdPath, title);
+    return;
+  }
+
+  Serial.printf("[dl] downloading %s -> %s\n", url.c_str(), sdPath.c_str());
+  updateDisplay(STATE_PROCESSING);
+  drawLabel("DOWNLOADING");
+
+  HTTPClient http;
+  http.begin(url);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.setTimeout(30000);
+  int httpCode = http.GET();
+
+  if (httpCode != HTTP_CODE_OK) {
+    Serial.printf("[dl] HTTP %d for %s\n", httpCode, url.c_str());
+    http.end();
+    setDisplayError(ERR_API);
+    return;
+  }
+
+  int contentLength = http.getSize();
+  WiFiClient* stream = http.getStreamPtr();
+  File outFile = SD_MMC.open(sdPath, FILE_WRITE);
+  if (!outFile) {
+    Serial.printf("[dl] failed to open %s for writing\n", sdPath.c_str());
+    http.end();
+    setDisplayError(ERR_API);
+    return;
+  }
+
+  const size_t BUF_SIZE = 4096;
+  uint8_t buf[BUF_SIZE];
+  int totalWritten = 0;
+  while (http.connected() && (contentLength < 0 || totalWritten < contentLength)) {
+    size_t avail = stream->available();
+    if (avail == 0) { delay(1); continue; }
+    size_t toRead = (avail < BUF_SIZE) ? avail : BUF_SIZE;
+    int bytesRead = stream->read(buf, toRead);
+    if (bytesRead <= 0) break;
+    outFile.write(buf, bytesRead);
+    totalWritten += bytesRead;
+  }
+  outFile.close();
+  http.end();
+
+  Serial.printf("[dl] saved %d bytes to %s\n", totalWritten, sdPath.c_str());
+
+  if (totalWritten > 0 && isMp3(sdPath)) {
+    playSongFile(sdPath, title);
+  } else {
+    Serial.println("[dl] download appears empty or not an mp3");
+    SD_MMC.remove(sdPath);
+    setDisplayError(ERR_API);
+  }
+}
+
 void playSongFile(const String& path, const String& title) {
   if (!sdReady) { Serial.println("[music] SD card not ready - can't play"); return; }
+  if (!musicRing) { Serial.println("[music] ps_malloc failed at boot - music playback unavailable"); return; }
   if (musicPlaying) stopMusic();
 
   mp3Source = new AudioFileSourceFS(SD_MMC, path.c_str());
   if (!mp3Output) mp3Output = new I2SMusicOutput();
   mp3Decoder = new AudioGeneratorMP3();
+  musicHead = musicTail = musicFill = 0;
+  musicDecoderDone = false;
   if (!mp3Decoder->begin(mp3Source, mp3Output)) {
     Serial.printf("[music] failed to start %s\n", path.c_str());
     delete mp3Decoder; mp3Decoder = nullptr;
@@ -1300,21 +1692,118 @@ void playSongFile(const String& path, const String& title) {
     return;
   }
   g_currentTrackName = title.length() ? title : path.substring(path.lastIndexOf('/') + 1);
+  g_currentSongPath  = path;
   musicPlaying = true;
+  musicPaused  = false;   // a fresh track always starts playing, regardless of the last one's pause state
   Serial.printf("[music] playing %s (%s)\n", g_currentTrackName.c_str(), path.c_str());
   updateDisplay(STATE_MUSIC, g_currentTrackName.c_str());
 }
 
-// Called once per loop() iteration while musicPlaying, mirroring drainTtsRing()'s role for TTS.
-void musicLoop() {
-  if (!mp3Decoder || !mp3Decoder->isRunning()) {
-    stopMusic();
-    return;
+// Paced consumer: called once per musicLoop() iteration. Writes exactly one ~11.6ms slice to
+// I2S_speaker if any is queued - same bounded-per-call contract as drainTtsRing(), regardless of
+// how much mp3Decoder->loop() just decoded into musicRing this iteration.
+void drainMusicRing() {
+  if (!musicRing || musicFill == 0) return;
+  const size_t sliceBytes = 512 * 4;   // 512 frames, 4 bytes/frame (int16 L + int16 R)
+  size_t n = min(sliceBytes, musicFill) & ~size_t(3);   // keep 4-byte frame alignment
+  if (n == 0) return;
+
+  uint8_t raw[sliceBytes];
+  size_t firstPart = MUSIC_RING_BYTES - musicTail;
+  if (firstPart > n) firstPart = n;
+  memcpy(raw, musicRing + musicTail, firstPart);
+  if (firstPart < n) memcpy(raw + firstPart, musicRing, n - firstPart);
+  I2S_speaker.write(raw, n);
+
+  musicTail = (musicTail + n) % MUSIC_RING_BYTES;
+  musicFill -= n;
+}
+
+// Pops the next queued song (see g_songQueue*'s declaration up top) into the g_pendingSong*
+// deferred-start slot used elsewhere (webSocketEvent()'s "play_song" handler, the interrupted-
+// song resume path), shifting the rest of the queue down one slot. Only called (from
+// advanceToNextSong() below) once g_songQueueCount is already known to be > 0.
+void dequeueNextSong() {
+  g_pendingSongPath  = g_songQueuePath[0];
+  g_pendingSongTitle = g_songQueueTitle[0];
+  g_songPending = true;
+  for (int i = 1; i < g_songQueueCount; i++) {
+    g_songQueuePath[i - 1]  = g_songQueuePath[i];
+    g_songQueueTitle[i - 1] = g_songQueueTitle[i];
   }
-  if (!mp3Decoder->loop()) {
-    mp3Decoder->stop();   // track finished (or hit a decode error)
+  g_songQueueCount--;
+}
+
+// Inserts a song at the FRONT of the up-next queue (unlike a normal enqueue, which appends) -
+// used by handleMusicPrev() to put the song being left back where "Next" would return to it.
+// Silently drops the request if the queue is already full rather than growing past SONG_QUEUE_MAX.
+void unshiftQueue(const String& path, const String& title) {
+  if (g_songQueueCount >= SONG_QUEUE_MAX) return;
+  for (int i = g_songQueueCount; i > 0; i--) {
+    g_songQueuePath[i]  = g_songQueuePath[i - 1];
+    g_songQueueTitle[i] = g_songQueueTitle[i - 1];
+  }
+  g_songQueuePath[0]  = path;
+  g_songQueueTitle[0] = title;
+  g_songQueueCount++;
+}
+
+// Appends to the /music page's "Prev" history (see g_songHistory*'s declaration up top). Drops
+// the oldest entry to make room past SONG_HISTORY_MAX rather than growing unbounded - a playlist
+// longer than that just can't be rewound all the way back to its start.
+void pushHistory(const String& path, const String& title) {
+  if (!path.length()) return;   // nothing has played yet - don't record an empty placeholder
+  if (g_songHistoryCount >= SONG_HISTORY_MAX) {
+    for (int i = 1; i < SONG_HISTORY_MAX; i++) {
+      g_songHistoryPath[i - 1]  = g_songHistoryPath[i];
+      g_songHistoryTitle[i - 1] = g_songHistoryTitle[i];
+    }
+    g_songHistoryCount = SONG_HISTORY_MAX - 1;
+  }
+  g_songHistoryPath[g_songHistoryCount]  = path;
+  g_songHistoryTitle[g_songHistoryCount] = title;
+  g_songHistoryCount++;
+}
+
+// Pops the most recently played song off the history stack. Caller must check
+// g_songHistoryCount > 0 first.
+void popHistory(String& path, String& title) {
+  g_songHistoryCount--;
+  path  = g_songHistoryPath[g_songHistoryCount];
+  title = g_songHistoryTitle[g_songHistoryCount];
+}
+
+// Shared by musicLoop() (current track finished on its own) and the /music/next web control:
+// records the song being left in history, stops it, and starts whatever's at the front of the
+// queue if anything is - otherwise playback just stops. Caller must check musicPlaying first.
+void advanceToNextSong() {
+  pushHistory(g_currentSongPath, g_currentTrackName);
+  // stopMusic() briefly shows STATE_IDLE (one ~20-25ms display flush) even when a queued song is
+  // about to start right back up on the next loop() iteration - a minor cosmetic blip traded for
+  // reusing the same well-tested stop/start path rather than a separate track-to-track one.
+  stopMusic();
+  if (g_songQueueCount > 0) dequeueNextSong();
+}
+
+// Called once per loop() iteration while musicPlaying, mirroring drainTtsRing()'s role for TTS.
+// The decode step just fills musicRing (no blocking I2S write in it - see ConsumeSample()'s
+// comment above), so this always drains a slice too; the track only advances once decoding has
+// finished *and* the ring has fully drained, so the last ~0.37s of buffered audio isn't cut off
+// early (mirrors drainTtsRing()'s ttsFill==0 && audioEndReceived gate).
+void musicLoop() {
+  if (musicPaused) return;   // frozen by the /music/pause control - no decode step, no I2S write
+  if (mp3Decoder && mp3Decoder->isRunning() && !musicDecoderDone) {
+    if (!mp3Decoder->loop()) {
+      mp3Decoder->stop();   // track finished (or hit a decode error)
+      musicDecoderDone = true;
+    }
+  } else {
+    musicDecoderDone = true;
+  }
+  drainMusicRing();
+  if (musicDecoderDone && musicFill == 0) {
     Serial.println("[music] finished");
-    stopMusic();
+    advanceToNextSong();
   }
 }
 
@@ -1331,6 +1820,9 @@ void setup() {
 
   ttsRing = (uint8_t*) ps_malloc(TTS_RING_BYTES);
   if (!ttsRing) { Serial.println("FATAL: ps_malloc (tts ring) failed"); while (true) delay(1000); }
+
+  musicRing = (uint8_t*) ps_malloc(MUSIC_RING_BYTES);
+  if (!musicRing) Serial.println("WARNING: ps_malloc (music ring) failed - SD song playback disabled");
 
   displayInit();   // early, so mic/WiFi init failures below can still show an error icon
   g_vpsHost = loadVpsHost();   // before any possible runWifiSetupPortal() call below, which shows it
@@ -1487,6 +1979,9 @@ void loop() {
       return;   // musicLoop() above already paces this iteration via its blocking I2S write
     }
     Serial.println("[touch] stopping song to listen");
+    g_interruptedSongPath  = g_currentSongPath;
+    g_interruptedSongTitle = g_currentTrackName;
+    g_songWasInterrupted   = true;
     stopMusic();
   }
 
@@ -1498,6 +1993,12 @@ void loop() {
     g_songPending = false;
     playSongFile(g_pendingSongPath, g_pendingSongTitle);
     return;   // don't also fall through into a tap-triggered recording this same iteration
+  }
+
+  if (g_downloadPending && !waitingForReply && !musicPlaying) {
+    g_downloadPending = false;
+    downloadAndPlaySong(g_downloadUrl, g_downloadPath, g_downloadTitle);
+    return;
   }
 
   if (!tapped) {

@@ -35,6 +35,25 @@ def _slugify(title: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")
 
 
+# Characters illegal in a FAT32/exFAT path segment (the SD card's filesystem), plus control
+# chars - stripped rather than slugified so the on-card folder stays human-readable (matches the
+# existing library's own album folders, e.g. "Bichagadu (2016) ~320Kbps").
+_ILLEGAL_FS_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def _sanitize_folder(name: str) -> str:
+    cleaned = _ILLEGAL_FS_CHARS.sub("", name).strip(" .")
+    return cleaned or "Downloads"
+
+
+def sd_path(album: str, sd_filename: str) -> str:
+    """Builds the on-card path a downloaded song will live at - mirrors song_index._song_path()'s
+    "{SONGS_ROOT}/{album}/{title}.mp3" convention so downloads land in the same layout as the
+    pre-built library instead of a generic catch-all folder."""
+    from services.song_index import SONGS_ROOT
+    return f"{SONGS_ROOT}/{album}/{sd_filename}"
+
+
 def _sweep_stale(max_age_seconds: int = MAX_AGE_SECONDS) -> None:
     """Deletes any file in TEMP_DIR older than max_age_seconds, regardless of _pending state -
     catches downloads whose ack never arrived (crash, dropped connection) and survives process
@@ -53,8 +72,10 @@ def _sweep_stale(max_age_seconds: int = MAX_AGE_SECONDS) -> None:
 
 async def search_and_download(query: str) -> dict | None:
     """Searches YouTube for `query` and downloads+transcodes the best match to an MP3 in TEMP_DIR.
-    Returns {"download_id", "temp_path", "title", "sd_filename"} on success, None if nothing was
-    found or the download/transcode failed."""
+    Returns {"download_id", "temp_path", "title", "album", "sd_filename"} on success, None if
+    nothing was found or the download/transcode failed. `album` is best-effort - taken from
+    whatever album/artist/channel metadata yt-dlp extracted for the video, falling back to
+    "Downloads" when none of that is present (typical for a plain, non-"YouTube Music" upload)."""
     import asyncio
 
     _sweep_stale()
@@ -100,6 +121,7 @@ async def search_and_download(query: str) -> dict | None:
             return None
 
         title = entry.get("title") or query
+        album = _sanitize_folder(entry.get("album") or entry.get("artist") or entry.get("channel") or "Downloads")
         temp_path = os.path.join(TEMP_DIR, f"{download_id}.mp3")
         if not os.path.isfile(temp_path):
             return None
@@ -108,17 +130,21 @@ async def search_and_download(query: str) -> dict | None:
             "download_id": download_id,
             "temp_path": temp_path,
             "title": title,
+            "album": album,
             "sd_filename": f"{_slugify(title)}.mp3",
         }
 
     return await asyncio.to_thread(_run)
 
 
-def register_pending(download_id: str, *, temp_path: str, sd_filename: str, title: str, thread_id: str) -> None:
+def register_pending(
+    download_id: str, *, temp_path: str, sd_filename: str, title: str, album: str, thread_id: str,
+) -> None:
     _pending[download_id] = {
         "temp_path": temp_path,
         "sd_filename": sd_filename,
         "title": title,
+        "album": album,
         "thread_id": thread_id,
         "created_at": time.time(),
     }
@@ -171,7 +197,7 @@ def confirm_download(download_id: str, success: bool) -> None:
 
     if success:
         try:
-            song_index.add_song(entry["title"], entry["sd_filename"])
+            song_index.add_song(entry["title"], entry["sd_filename"], entry.get("album"))
         except Exception as e:
             logger.error(f"[yt_song] add_song failed for '{entry['title']}': {e}")
 

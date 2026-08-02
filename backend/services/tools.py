@@ -27,11 +27,10 @@ async def web_search(query: str) -> str:
 async def play_radio(station: str) -> str:
     """Use when the user asks to play an internet radio station - e.g. 'play radio 98.3 FM',
     'tune in to Radio Mirchi', 'play some FM radio', 'play Big FM', 'play AP9 FM', 'play Melody
-    Radio', 'play station 3', 'play some Telugu radio'. `station` should be the station name/
-    frequency/number/language exactly as the user said it - a handful of known-good stations
-    (AP9 FM, Melody Radio, All India Radio 081/021/022, RadioBoss Stream 33, Asura Radio, Mahi
-    Radio - referenceable by name, by 1-based station number, or by language/genre like "Telugu")
-    are checked first; anything else falls back to a live web search."""
+    Radio', 'play station 3'. `station` should be the station name/frequency/number exactly as the
+    user said it - a handful of known-good stations (AP9 FM, Melody Radio, Asura Radio, Mahi Radio,
+    All India Radio, RadioBoss Stream 33, referenceable by name or by 1-based station number) are
+    checked first; anything else falls back to a live web search."""
     from services.llm import current_thread_id, queue_device_action
     from services.radio import search_station
 
@@ -54,40 +53,37 @@ def stop_radio(query: str = "") -> str:
 
 @tool
 async def download_song(song: str) -> str:
-    """Use when the user asks to play a specific song/track (not a radio station) that play_song
-    couldn't find in the local library - e.g. 'play Tum Hi Ho', 'download and play <song> by
-    <artist>'. Searches YouTube (via yt-dlp) for the song, downloads and transcodes it to MP3,
-    and queues a device download+play action - the ESP32 fetches it from a temporary backend URL
-    and writes it to SD card. The song is only added to the local music index (so future requests
-    use play_song instead) once the device confirms the write succeeded. Tell the user if no
-    match could be downloaded."""
+    """Use ONLY after the user has explicitly confirmed they want a song downloaded from the web -
+    e.g. play_song found no local match, you asked 'want me to download it?', and they said yes.
+    Never call this on the same turn a play_song lookup came up empty, and never call it for a
+    song already confirmed to exist locally - ask first. Once confirmed: searches YouTube for
+    `song`, downloads and transcodes it to MP3, and queues a device download+play action. The song
+    is added to the local music index only once the device confirms it saved the file to SD card,
+    so future requests use play_song instead. Tell the user if nothing was found or downloadable."""
     from services.llm import current_thread_id, queue_device_action
-    from services.song_index import downloads_path
-    from services.yt_song import build_download_url, register_pending, search_and_download
+    from services.yt_song import search_and_download, register_pending, build_download_url, sd_path
 
     thread_id = current_thread_id.get()
     result = await search_and_download(song)
     if not result:
-        return f"Couldn't find a downloadable version of '{song}'."
+        return f"Couldn't find or download '{song}' from YouTube."
 
-    sd_path = downloads_path(result["sd_filename"])
+    download_id = result["download_id"]
     register_pending(
-        result["download_id"],
-        temp_path=result["temp_path"],
-        sd_filename=result["sd_filename"],
-        title=result["title"],
-        thread_id=thread_id,
+        download_id,
+        temp_path=result["temp_path"], sd_filename=result["sd_filename"],
+        title=result["title"], album=result["album"], thread_id=thread_id,
     )
-    url = build_download_url(thread_id, result["download_id"])
+    url = build_download_url(thread_id, download_id)
     if not url:
-        return f"Couldn't prepare a download link for '{result['title']}'."
+        return f"Downloaded '{result['title']}' but couldn't reach the device to send it over."
 
     queue_device_action(thread_id, {
         "type": "download_song",
+        "download_id": download_id,
         "url": url,
         "title": result["title"],
-        "path": sd_path,
-        "download_id": result["download_id"],
+        "path": sd_path(result["album"], result["sd_filename"]),
     })
     return f"Downloading and playing {result['title']} now."
 
@@ -96,8 +92,10 @@ async def download_song(song: str) -> str:
 async def play_song(song: str) -> str:
     """Use when the user asks to play a specific song, or a mood/genre/language match, from the
     local music library - e.g. 'play O Rangula Chilaka', 'play something romantic', 'play a telugu
-    melody song'. Prefer this over download_song - only fall back to download_song if this returns
-    no match and the user still wants that specific track."""
+    melody song'. Prefer this over download_song. If this returns no match, do NOT call
+    download_song in the same turn - tell the user it's not in the local library and ask whether
+    you should download it from the web instead (e.g. "I don't have that one locally - want me to
+    download it? It'll take a few seconds."). Only call download_song after the user replies yes."""
     from services.llm import current_thread_id, queue_device_action
     from services.song_index import find_song
 

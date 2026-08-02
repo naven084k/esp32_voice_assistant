@@ -58,11 +58,6 @@ TAVILY_API_KEY=tvly-...        # Web search tool — free tier at app.tavily.com
 
 > STT, TTS, and LLM are all cloud calls now — no local model download needed, but network access is required at startup and per request.
 
-> `download_song` (the fallback when a requested song isn't already in the local library) uses
-> `yt-dlp` + `ffmpeg` to search and transcode audio. `yt-dlp` is a pip dependency, but `ffmpeg`
-> must be installed as a system binary — `brew install ffmpeg` on macOS, `apt-get install ffmpeg`
-> on Debian/Ubuntu — it's not something `pip install -r requirements.txt` can provide.
-
 ### 3. Start the server
 
 ```bash
@@ -304,10 +299,8 @@ receiving raw 24kHz PCM back — no WAV framing on either side.
 
 ### SD-card song playback
 
-`http://<esp32-ip>:8080/` (see `SD_SERVER_PORT`) is a home page linking to the SD file browser
-(`/browse`), the now-playing/queue page (`/music`), and a volume slider (shared gain for both TTS
-and music playback). The file browser can also play MP3s straight off the card through the same
-speaker the voice assistant uses — browse into a folder
+The SD-card file browser (`http://<esp32-ip>:8080/`, see `SD_SERVER_PORT`) can also play MP3s
+straight off the card through the same speaker the voice assistant uses — browse into a folder
 (e.g. `/Naveen/Songs/<album>/`) and click **▶ Play** next to any `.mp3`. That builds a playlist
 from every `.mp3` in that folder (sorted) and starts playing; **Next**/**Stop** controls stay
 visible on every page while something's playing. Tapping the touch pad also stops playback and
@@ -321,13 +314,6 @@ the same `playSongFile()` used by the file browser's ▶ Play button. Say "stop 
 to send `{"type": "stop_song"}`. **The path is built from the JSON's `album`/`title` fields, so the
 SD card's actual folder/file names must match those strings (and casing) exactly** — see
 `SONGS_ROOT`/`SONGS_INDEX_PATH` env vars in `song_index.py` if your layout differs.
-
-If a song isn't in the local library, `download_song` (`services/tools.py` + `services/yt_song.py`)
-searches YouTube via `yt-dlp`, downloads and transcodes it to MP3 via `ffmpeg`, and briefly hosts
-it at `/api/media/<id>.mp3`. The ESP32 downloads that URL and writes it to
-`/Naveen/songs/Downloads/`, same as before, then confirms the write back over the WS connection
-(`{"type": "download_ack", "download_id": "...", "success": true|false}`) — only on a successful
-ack does the backend add the song to `data/songs_index.json` and delete its own temp copy.
 
 ---
 

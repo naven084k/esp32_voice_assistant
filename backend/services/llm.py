@@ -38,22 +38,24 @@ def pop_device_action(thread_id: str) -> dict | None:
     return _pending_device_actions.pop(thread_id, None)
 
 
-# Lets a tool (download_song) build a self-referential URL (e.g. for the ESP32 to fetch a
-# yt-dlp-downloaded temp file) without knowing its own public address - the WS handler stashes the
-# Host header from the connection the ESP32 already reached us through (a cloudflared tunnel
-# hostname, which rotates on restart) at connect time. Same plain-dict-keyed-by-thread_id
-# rationale as _pending_device_actions above.
+# The WS connection's own Host header, stashed per thread_id the same "plain dict, not a
+# ContextVar" way as _pending_device_actions above - lets download_song build a URL the ESP32 can
+# actually reach back through (see services/yt_song.py's build_download_url()), since the device
+# only ever talks to us through a cloudflared tunnel hostname that rotates on restart.
 _ws_hosts: dict[str, str] = {}
 
 
-def set_ws_host(thread_id: str, host: str | None) -> None:
-    if thread_id and host:
+def set_ws_host(thread_id: str, host: str) -> None:
+    if thread_id:
         _ws_hosts[thread_id] = host
 
 
 def get_ws_host(thread_id: str) -> str | None:
     return _ws_hosts.get(thread_id)
 
+
+def clear_ws_host(thread_id: str) -> None:
+    _ws_hosts.pop(thread_id, None)
 
 DEFAULT_SYSTEM = """You are ARIA, a voice assistant for the Kumar family in Hyderabad, India. Primary user: Naveen (software engineer). You also speak with children.
 
@@ -71,6 +73,8 @@ BACKGROUND: If the user says "do this in background", "send me later", "don't wa
 CONTEXT: IST timezone, Celsius, kilometers, INR. Use Indian English ("switch off" not "turn off").
 
 CHILDREN: If the speaker seems to be a child, keep answers age-appropriate and positive. Redirect sensitive topics: "That's a great thing to ask your dad!"
+
+MUSIC: If a requested song isn't found in the local library, don't download it automatically - tell the user and ask questions and confirm, then only download after they confirm.
 
 IF UNSURE: Say so briefly. Confirm before any destructive action."""
 

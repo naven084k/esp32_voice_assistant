@@ -11,6 +11,10 @@ and send.
     SPEAKING --(reply finishes)--> IDLE
     SPEAKING --(Enter)--> RECORDING (barge-in; remainder of reply is discarded)
     A queued device action after the reply (radio / download_song / play_song) --> MUSIC
+    (download_song is also how the yt-dlp fallback - services/tools.py's download_song tool,
+    services/yt_song.py - gets end-to-end tested without real ESP32 hardware: this client
+    downloads the /api/media/... URL like the firmware would, then sends a "download_ack" back
+    over the WS, which is what actually triggers the backend's data/songs_index.json update.)
     MUSIC --(Enter)--> RECORDING   MUSIC --(finishes naturally)--> IDLE
 
 Usage:
@@ -282,7 +286,12 @@ class SketchClient:
         self.music_playing = False
         self.music_kind = None
 
-    async def download_and_play_song(self, url: str, title: str, path: str = ""):
+    async def download_and_play_song(self, url: str, title: str, path: str = "", download_id: str = ""):
+        # Mirrors the real firmware's downloadAndPlaySong() (backend/esp32/voice_button.ino):
+        # every exit point sends a download_ack back over the same WS connection so the backend
+        # knows whether to add this song to data/songs_index.json and clean up its temp copy
+        # (services/yt_song.py's confirm_download()) - without this ack the backend just holds
+        # the temp file until its own age-based sweep eventually clears it.
         self.begin_music_state("song")
         if path:
             print(f"[song] downloading '{title}' from {url} (SD path: {path})")
@@ -297,6 +306,7 @@ class SketchClient:
                         print(f"[song] download failed: HTTP {resp.status_code}")
                         tmp.close()
                         self.stop_music()
+                        await self.send_download_ack(download_id, False, "http_error")
                         return
                     async for part in resp.aiter_bytes():
                         tmp.write(part)
@@ -305,19 +315,23 @@ class SketchClient:
                             print("[song] download exceeded max size - aborting")
                             tmp.close()
                             self.stop_music()
+                            await self.send_download_ack(download_id, False, "too_large")
                             return
             tmp.close()
         except Exception as e:
             print(f"[song] download failed: {e}")
             self.stop_music()
+            await self.send_download_ack(download_id, False, "exception")
             return
 
         if total == 0:
             print("[song] download produced no data - aborting playback")
             self.stop_music()
+            await self.send_download_ack(download_id, False, "empty_or_invalid")
             return
 
         print(f"[song] downloaded {total} bytes, starting playback")
+        await self.send_download_ack(download_id, True)
         if not self.music_playing:
             return
         if HAS_FFPLAY:
@@ -327,6 +341,15 @@ class SketchClient:
             )
         else:
             print("  (ffplay not found on PATH - install ffmpeg to actually hear this song)")
+
+    async def send_download_ack(self, download_id: str, success: bool, error: str = ""):
+        if not download_id:
+            return  # e.g. an older backend/action that predates download_id - nothing to ack
+        msg = {"type": "download_ack", "download_id": download_id, "success": success}
+        if error:
+            msg["error"] = error
+        await self.ws.send(json.dumps(msg))
+        print(f"[song] sent download_ack: success={success}" + (f" error={error}" if error else ""))
 
     # ---- WS receive loop ---------------------------------------------------------------------
 
@@ -379,7 +402,9 @@ class SketchClient:
                     self.stop_music()
                     self.state = "IDLE"
             elif t == "download_song":
-                asyncio.create_task(self.download_and_play_song(data.get("url", ""), data.get("title", ""), data.get("path", "")))
+                asyncio.create_task(self.download_and_play_song(
+                    data.get("url", ""), data.get("title", ""), data.get("path", ""), data.get("download_id", ""),
+                ))
             elif t == "play_song":
                 self.play_song(data.get("path", ""), data.get("title", ""))
             elif t == "stop_song":

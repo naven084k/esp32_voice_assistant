@@ -46,6 +46,13 @@ def _to_result(song: dict) -> dict:
     return {"title": song["title"], "album": song["album"], "path": _song_path(song)}
 
 
+def downloads_path(filename: str) -> str:
+    """Absolute SD-card path for a file that will live under the Downloads album, before it's
+    necessarily been added to the index - lets a caller build the on-card path for a device
+    action ahead of add_song() actually running (e.g. once download confirmation arrives)."""
+    return f"{SONGS_ROOT}/Downloads/{filename}"
+
+
 def add_song(title: str, filename: str) -> dict:
     """Append a new song to the index and return the entry. Clears the LRU cache so subsequent
     find_song() calls see it immediately."""

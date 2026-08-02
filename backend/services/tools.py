@@ -27,10 +27,11 @@ async def web_search(query: str) -> str:
 async def play_radio(station: str) -> str:
     """Use when the user asks to play an internet radio station - e.g. 'play radio 98.3 FM',
     'tune in to Radio Mirchi', 'play some FM radio', 'play Big FM', 'play AP9 FM', 'play Melody
-    Radio', 'play station 3'. `station` should be the station name/frequency/number exactly as the
-    user said it - a handful of known-good stations (AP9 FM, Melody Radio, Asura Radio, Mahi Radio,
-    All India Radio, RadioBoss Stream 33, referenceable by name or by 1-based station number) are
-    checked first; anything else falls back to a live web search."""
+    Radio', 'play station 3', 'play some Telugu radio'. `station` should be the station name/
+    frequency/number/language exactly as the user said it - a handful of known-good stations
+    (AP9 FM, Melody Radio, All India Radio 081/021/022, RadioBoss Stream 33, Asura Radio, Mahi
+    Radio - referenceable by name, by 1-based station number, or by language/genre like "Telugu")
+    are checked first; anything else falls back to a live web search."""
     from services.llm import current_thread_id, queue_device_action
     from services.radio import search_station
 
@@ -53,40 +54,42 @@ def stop_radio(query: str = "") -> str:
 
 @tool
 async def download_song(song: str) -> str:
-    """Use when the user asks to play a specific song/track (not a radio station) - e.g.
-    'play Tum Hi Ho', 'download and play <song> by <artist>'. Searches for a direct
-    downloadable audio file link (.mp3/.wav) and, if found, queues a device download+play
-    action. The song is also added to the local music index so future requests use play_song
-    instead. Tell the user if no downloadable link was found."""
-    import re
+    """Use when the user asks to play a specific song/track (not a radio station) that play_song
+    couldn't find in the local library - e.g. 'play Tum Hi Ho', 'download and play <song> by
+    <artist>'. Searches YouTube (via yt-dlp) for the song, downloads and transcodes it to MP3,
+    and queues a device download+play action - the ESP32 fetches it from a temporary backend URL
+    and writes it to SD card. The song is only added to the local music index (so future requests
+    use play_song instead) once the device confirms the write succeeded. Tell the user if no
+    match could be downloaded."""
     from services.llm import current_thread_id, queue_device_action
-    from services.song_index import add_song
+    from services.song_index import downloads_path
+    from services.yt_song import build_download_url, register_pending, search_and_download
 
-    client = AsyncTavilyClient(api_key=os.environ["TAVILY_API_KEY"])
-    response = await client.search(f"{song} mp3 download free direct file link", max_results=10)
-    results = response.get("results", [])
-    audio_url = None
-    title = song
-    for r in results:
-        url = r.get("url", "")
-        if url.lower().split("?")[0].endswith((".mp3", ".wav")):
-            audio_url = url
-            title = r.get("title") or song
-            break
-    if not audio_url:
-        return f"Couldn't find a direct playable audio link for '{song}'."
+    thread_id = current_thread_id.get()
+    result = await search_and_download(song)
+    if not result:
+        return f"Couldn't find a downloadable version of '{song}'."
 
-    slug = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")
-    filename = f"{slug}.mp3"
-    indexed = add_song(title, filename)
+    sd_path = downloads_path(result["sd_filename"])
+    register_pending(
+        result["download_id"],
+        temp_path=result["temp_path"],
+        sd_filename=result["sd_filename"],
+        title=result["title"],
+        thread_id=thread_id,
+    )
+    url = build_download_url(thread_id, result["download_id"])
+    if not url:
+        return f"Couldn't prepare a download link for '{result['title']}'."
 
-    queue_device_action(current_thread_id.get(), {
+    queue_device_action(thread_id, {
         "type": "download_song",
-        "url": audio_url,
-        "title": title,
-        "path": indexed["path"],
+        "url": url,
+        "title": result["title"],
+        "path": sd_path,
+        "download_id": result["download_id"],
     })
-    return f"Downloading and playing {title} now."
+    return f"Downloading and playing {result['title']} now."
 
 
 @tool

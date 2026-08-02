@@ -5,7 +5,7 @@ import uuid
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 
-from services import stt, llm, tts
+from services import stt, llm, tts, yt_song
 from services.request_timer import new_timer, get_timer
 
 router = APIRouter()
@@ -62,6 +62,10 @@ async def voice_ws(websocket: WebSocket):
         - text frame {"type": "interrupt"}   — barge-in: abort whatever turn is in flight (STT/LLM/
           still-streaming TTS) right away and elicit an immediate audio_end boundary marker, instead
           of the server pacing out the rest of an already-abandoned reply before it can move on
+        - text frame {"type": "download_ack", "download_id": "...", "success": true|false} — sent
+          independently of any turn, once the device finishes (or fails) writing a yt-dlp-downloaded
+          song to SD card; see services/yt_song.py. Gates whether the song gets added to the local
+          index and triggers cleanup of the backend's temp copy either way.
       Server → client:
         - text frame {"type": "transcript", "text": "..."}
         - text frame {"type": "reply", "text": "..."}
@@ -70,8 +74,9 @@ async def voice_ws(websocket: WebSocket):
           boundary marker for a turn that got cut short by a client "interrupt"
         - text frame {"type": "error", "detail": "..."}
         - after audio_end, an optional queued device action: {"type": "radio", ...} /
-          {"type": "stop_radio"} / {"type": "download_song", "url": "...", "title": "..."} /
-          {"type": "play_song", "path": "...", "title": "..."} / {"type": "stop_song"}
+          {"type": "stop_radio"} / {"type": "download_song", "url": "...", "title": "...",
+          "path": "...", "download_id": "..."} / {"type": "play_song", "path": "...", "title": "..."} /
+          {"type": "stop_song"}
 
     Turn processing (STT → LLM → TTS) runs as a background task rather than being awaited inline,
     so this loop keeps reading incoming frames (in particular "interrupt") the whole time a turn is
@@ -84,6 +89,11 @@ async def voice_ws(websocket: WebSocket):
         "voice": tts.DEFAULT_VOICE,
         "thread_id": str(uuid.uuid4()),
     }
+    # Lets download_song build a self-referential URL for the ESP32 to fetch (see
+    # services/yt_song.py's build_download_url) - the device only ever reaches us through a
+    # cloudflared tunnel hostname, which rotates on restart, so we derive it from whatever Host
+    # header it just used rather than hardcoding anything.
+    llm.set_ws_host(config["thread_id"], websocket.headers.get("host"))
     turn_task: asyncio.Task | None = None
 
     async def run_turn(audio_bytes: bytes, cfg: dict):
@@ -114,7 +124,12 @@ async def voice_ws(websocket: WebSocket):
             raise  # bubble up to outer handler — client left cleanly
         except Exception as e:
             logger.error(f"[ws/voice] turn failed (thread={cfg['thread_id']}, audio_bytes={len(audio_bytes)}): {e}", exc_info=True)
-            llm.pop_device_action(cfg["thread_id"])  # discard - never delivered for this turn
+            discarded = llm.pop_device_action(cfg["thread_id"])  # never delivered for this turn
+            if discarded and discarded.get("type") == "download_song":
+                # No device action was ever sent, so no ack will ever arrive - without this the
+                # already-downloaded temp file would sit until the next unrelated download's
+                # opportunistic sweep instead of being cleaned up right away.
+                yt_song.confirm_download(discarded["download_id"], success=False)
             try:
                 await websocket.send_json({"type": "error", "detail": str(e)})
             except Exception:
@@ -153,6 +168,12 @@ async def voice_ws(websocket: WebSocket):
 
                 if mtype == "config":
                     config.update({k: v for k, v in msg.items() if k in ("system_prompt", "voice", "thread_id")})
+                    llm.set_ws_host(config["thread_id"], websocket.headers.get("host"))
+
+                elif mtype == "download_ack":
+                    download_id = msg.get("download_id")
+                    if download_id:
+                        yt_song.confirm_download(download_id, success=bool(msg.get("success")))
 
                 elif mtype == "interrupt":
                     was_running = turn_task is not None and not turn_task.done()
@@ -181,3 +202,4 @@ async def voice_ws(websocket: WebSocket):
         pass
     finally:
         await cancel_turn_task()
+        yt_song.cleanup_thread(config["thread_id"])

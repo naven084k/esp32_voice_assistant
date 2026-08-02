@@ -19,6 +19,7 @@
 // ^ Libraries: "Adafruit SSD1306" + "Adafruit GFX Library" (Adafruit BusIO comes along
 //   as a dependency) — status OLED, see the "OLED status display" section below.
 #include <HTTPClient.h>   // chunked download of songs from URLs (download_song device action)
+#include <WiFiClientSecure.h>   // https:// downloads (yt-dlp-hosted /api/media/... URLs are always https, via cloudflared)
 #include <time.h>   // NTP-synced clock for the idle screen's occasional time display
 #include <math.h>   // sinf/lroundf for the idle face's breathing animation
 
@@ -148,6 +149,8 @@ bool     g_downloadPending = false;
 String   g_downloadUrl;
 String   g_downloadPath;      // SD card path, e.g. "/Naveen/songs/Downloads/slug.mp3"
 String   g_downloadTitle;
+String   g_downloadId;        // echoed back in the "download_ack" WS message so the backend can
+                               // match it to its pending-download registry (services/yt_song.py)
 
 // Up-next queue for playlist-style requests (backend's "play_song_queue" action, e.g. "play some
 // Arijit Singh songs") - the first song is started the normal g_pendingSong* way, the rest sit
@@ -1036,15 +1039,17 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
         Serial.printf("[WS] play_song_queue: %d song(s) queued (sdReady=%s)\n",
                       (first ? 0 : 1) + g_songQueueCount, sdReady ? "true" : "false");
       } else if (t == "download_song") {
-        String url   = (const char*)(doc["url"]   | "");
-        String path  = (const char*)(doc["path"]  | "");
-        String title = (const char*)(doc["title"] | "");
+        String url        = (const char*)(doc["url"]         | "");
+        String path        = (const char*)(doc["path"]        | "");
+        String title       = (const char*)(doc["title"]       | "");
+        String downloadId  = (const char*)(doc["download_id"] | "");
         if (sdReady && url.length() && path.length()) {
           g_songQueueCount   = 0;   // fresh single-song request replaces any playlist still queued
           g_songHistoryCount = 0;   // ...and its "prev" history too
           g_downloadUrl      = url;
           g_downloadPath     = path;
           g_downloadTitle    = title;
+          g_downloadId       = downloadId;
           g_downloadPending  = true;
           Serial.printf("[WS] download_song queued: %s -> %s\n", title.c_str(), path.c_str());
         } else {
@@ -1295,7 +1300,7 @@ const char* sdCardTypeName(uint8_t type) {
 }
 
 // Lists only the immediate children of dirname (no recursion) - subfolders render as links
-// back to handleSdRoot with ?path=, so the user drills in one level at a time on click.
+// back to handleSdRoot (registered at /browse), so the user drills in one level at a time.
 void listSdDir(const String& dirname, String& html) {
   File root = SD_MMC.open(dirname);
   if (!root || !root.isDirectory()) return;
@@ -1306,12 +1311,78 @@ void listSdDir(const String& dirname, String& html) {
     String leaf = name.startsWith("/") ? name.substring(name.lastIndexOf('/') + 1) : name;
     String fullPath = name.startsWith("/") ? name : dirname + (dirname.endsWith("/") ? "" : "/") + name;
     if (entry.isDirectory()) {
-      html += "<li><a href=\"/?path=" + fullPath + "\">" + leaf + "/</a></li>";
+      html += "<li><a href=\"/browse?path=" + fullPath + "\">" + leaf + "/</a></li>";
     } else {
       html += "<li><a href=\"/download?path=" + fullPath + "\">" + leaf + "</a> (" + String(entry.size()) + " bytes)</li>";
     }
     entry = root.openNextFile();
   }
+}
+
+// Shared look for every page on the SD/music web server (home, browse, music) - dark palette
+// matches the FastAPI backend's /chat-ui and /dashboard pages, so the whole project reads as one
+// thing even though this side is plain String concatenation (no JS framework/templating) rather
+// than those pages' inline-<style> HTMLResponse approach.
+const char* PAGE_CSS =
+  "body{font-family:-apple-system,Helvetica,Arial,sans-serif;background:#0f1115;color:#e6e6e6;"
+  "max-width:480px;margin:0 auto;padding:16px 20px 40px;line-height:1.5}"
+  "h1{margin:0 0 4px;font-size:22px;color:#fff}"
+  "h3{color:#fff;margin:0 0 8px}"
+  "a{color:#5b8cff;text-decoration:none}"
+  "a:hover{text-decoration:underline}"
+  ".nav{margin:0 0 18px;font-size:14px;color:#8a8f98}"
+  ".card{background:#1a1d24;border:1px solid #262a33;border-radius:10px;padding:14px 16px;margin:0 0 14px}"
+  "button,input[type=submit]{background:#5b8cff;color:#fff;border:none;border-radius:6px;"
+  "padding:7px 14px;font-size:14px}"
+  "input[type=range]{width:100%;margin:6px 0}"
+  "ul,ol{padding-left:20px;margin:6px 0}"
+  "form{margin:6px 0}";
+
+// Wraps `body` in a page shared across every route on this web server - viewport meta (this is
+// mostly used from a phone), the CSS above, and a small nav bar so every page links to the other
+// two (this is the actual "easy to find URLs" mechanism, not just the home page's list).
+// `extraHead` is for anything a specific page needs in <head> (e.g. /music's auto-refresh meta).
+String htmlPage(const String& title, const String& body, const char* extraHead = "") {
+  String html = "<html><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">";
+  html += extraHead;
+  html += "<title>" + title + "</title><style>" + String(PAGE_CSS) + "</style></head><body>";
+  html += "<h1>ARIA</h1>";
+  html += "<p class=\"nav\"><a href=\"/\">Home</a> &middot; <a href=\"/browse\">Browse</a> &middot; <a href=\"/music\">Music</a></p>";
+  html += body;
+  html += "</body></html>";
+  return html;
+}
+
+// Landing page at "/" - previously the SD browser lived here directly; now it's just a list of
+// links to the other pages (the actual point of this page, per the "hard to find URLs" request)
+// plus the volume slider (shared gain for both TTS and music, g_volumePercent - see loop()'s
+// serial "v<n>" handling below for the same control's original bench-tuning entry point).
+void handleHomePage() {
+  String body = "<div class=\"card\"><h3>Pages</h3><ul>"
+                "<li><a href=\"/browse\">SD File Browser</a></li>"
+                "<li><a href=\"/music\">Music Player (Now Playing)</a></li>"
+                "</ul></div>";
+  body += "<div class=\"card\"><h3>Volume</h3>"
+          "<form method=\"GET\" action=\"/volume\">"
+          "<input type=\"range\" min=\"0\" max=\"150\" step=\"5\" name=\"v\" value=\"" + String(g_volumePercent) + "\">"
+          "<p>" + String(g_volumePercent) + "% (0=mute, 100=normal, up to 150=boosted) "
+          "<button type=\"submit\">Set</button></p>"
+          "</form></div>";
+  fileServer.send(200, "text/html", htmlPage("ARIA Home", body));
+}
+
+// Sets g_volumePercent (clamped 0-150, same range/meaning as the serial "v<n>" bench command in
+// loop()) from either the home page's slider or /music's quick +/-10 links, then redirects back
+// to whichever page it came from (?back=music -> /music, otherwise the home page).
+void handleVolumeSet() {
+  int v = fileServer.hasArg("v") ? fileServer.arg("v").toInt() : g_volumePercent;
+  if (v < 0) v = 0;
+  if (v > 150) v = 150;
+  g_volumePercent = v;
+  Serial.printf("[web] volume set to %d%%\n", g_volumePercent);
+  bool backToMusic = fileServer.hasArg("back") && fileServer.arg("back") == "music";
+  fileServer.sendHeader("Location", backToMusic ? "/music" : "/");
+  fileServer.send(303);
 }
 
 void handleSdRoot() {
@@ -1320,20 +1391,20 @@ void handleSdRoot() {
     return;
   }
   String path = fileServer.hasArg("path") ? fileServer.arg("path") : "/";
-  String html = "<html><body><h3>SD Card: " + path + "</h3><p><a href=\"/music\">Now Playing / Queue</a></p>";
+  String body = "<div class=\"card\"><h3>SD Card: " + path + "</h3>";
   if (path != "/") {
     int lastSlash = path.lastIndexOf('/');
     String parent = (lastSlash <= 0) ? "/" : path.substring(0, lastSlash);
-    html += "<p><a href=\"/?path=" + parent + "\">.. (up)</a></p>";
+    body += "<p><a href=\"/browse?path=" + parent + "\">.. (up)</a></p>";
   }
   // Uploads land in whatever folder is currently being browsed - handleFileUpload() reads the
   // same ?path= query param off this form's action URL.
-  html += "<form method=\"POST\" action=\"/upload?path=" + path + "\" enctype=\"multipart/form-data\">"
+  body += "<form method=\"POST\" action=\"/upload?path=" + path + "\" enctype=\"multipart/form-data\">"
           "<input type=\"file\" name=\"file\"> <input type=\"submit\" value=\"Upload\"></form>";
-  html += "<ul>";
-  listSdDir(path, html);
-  html += "</ul></body></html>";
-  fileServer.send(200, "text/html", html);
+  body += "<ul>";
+  listSdDir(path, body);
+  body += "</ul></div>";
+  fileServer.send(200, "text/html", htmlPage("SD Browser", body));
 }
 
 // Blocks loop() (and therefore webSocket.loop()/drainTtsRing()) for as long as the transfer
@@ -1389,7 +1460,7 @@ void handleFileUpload() {
 // back to the folder just uploaded into so the new file shows up in the listing.
 void handleUploadDone() {
   String dir = fileServer.hasArg("path") ? fileServer.arg("path") : "/";
-  fileServer.sendHeader("Location", "/?path=" + dir);
+  fileServer.sendHeader("Location", "/browse?path=" + dir);
   fileServer.send(303);
 }
 
@@ -1401,27 +1472,33 @@ void handleUploadDone() {
 // down in the "Music playback" section further below; forward-calling them here is fine, same as
 // webSocketEvent() forward-calling playSongFile()/downloadAndPlaySong() earlier in the file.
 void handleMusicPage() {
-  String html = "<html><head><meta http-equiv=\"refresh\" content=\"5\"></head><body>";
-  html += "<h3>Now Playing</h3>";
+  String body = "<div class=\"card\"><h3>Now Playing</h3>";
   if (musicPlaying) {
-    html += "<p>" + g_currentTrackName + (musicPaused ? " (paused)" : "") + "</p>";
+    body += "<p>" + g_currentTrackName + (musicPaused ? " (paused)" : "") + "</p>";
   } else {
-    html += "<p><i>(nothing playing)</i></p>";
+    body += "<p><i>(nothing playing)</i></p>";
   }
-  html += "<p>"
+  body += "<p>"
           "<a href=\"/music/prev\">&laquo; Prev</a> &nbsp; "
           "<a href=\"/music/pause\">" + String(musicPaused ? "Resume" : "Pause") + "</a> &nbsp; "
           "<a href=\"/music/next\">Next &raquo;</a> &nbsp; "
           "<a href=\"/music/stop\">Stop</a>"
           "</p>";
-  html += "<h3>Up Next</h3><ol>";
+  // Quick +/-10 adjustment without leaving this page (the full slider lives on the home page) -
+  // back=music tells handleVolumeSet() to redirect here instead of home.
+  int volDown = max(0, g_volumePercent - 10);
+  int volUp = min(150, g_volumePercent + 10);
+  body += "<p>Volume: " + String(g_volumePercent) + "% "
+          "<a href=\"/volume?v=" + String(volDown) + "&back=music\">&minus;</a> &nbsp; "
+          "<a href=\"/volume?v=" + String(volUp) + "&back=music\">+</a></p>";
+  body += "</div><div class=\"card\"><h3>Up Next</h3><ol>";
   if (g_songQueueCount == 0) {
-    html += "<li><i>(queue empty)</i></li>";
+    body += "<li><i>(queue empty)</i></li>";
   } else {
-    for (int i = 0; i < g_songQueueCount; i++) html += "<li>" + g_songQueueTitle[i] + "</li>";
+    for (int i = 0; i < g_songQueueCount; i++) body += "<li>" + g_songQueueTitle[i] + "</li>";
   }
-  html += "</ol><p><a href=\"/\">SD file browser</a></p></body></html>";
-  fileServer.send(200, "text/html", html);
+  body += "</ol></div>";
+  fileServer.send(200, "text/html", htmlPage("Now Playing", body, "<meta http-equiv=\"refresh\" content=\"5\">"));
 }
 
 void handleMusicNext() {
@@ -1499,7 +1576,8 @@ void initSdFileServer() {
     else                         Serial.println("[SD] /esp32 folder already present");
   }
 
-  fileServer.on("/", HTTP_GET, handleSdRoot);
+  fileServer.on("/", HTTP_GET, handleHomePage);
+  fileServer.on("/browse", HTTP_GET, handleSdRoot);
   fileServer.on("/download", HTTP_GET, handleSdDownload);
   fileServer.on("/upload", HTTP_POST, handleUploadDone, handleFileUpload);
   fileServer.on("/music", HTTP_GET, handleMusicPage);
@@ -1507,6 +1585,7 @@ void initSdFileServer() {
   fileServer.on("/music/prev", HTTP_GET, handleMusicPrev);
   fileServer.on("/music/pause", HTTP_GET, handleMusicPauseToggle);
   fileServer.on("/music/stop", HTTP_GET, handleMusicStop);
+  fileServer.on("/volume", HTTP_GET, handleVolumeSet);
   fileServer.begin();
   String ip = WiFi.localIP().toString();
   Serial.printf("[SD] file browser up at http://%s:%d/ (sdReady=%s)\n",
@@ -1602,11 +1681,32 @@ void stopMusic() {
   Serial.println("[music] stopped");
 }
 
+// Sends a {"type":"download_ack","download_id":...,"success":...[,"error":...]} WS message back
+// to the backend so it knows whether to add this song to its index and/or clean up its temp copy
+// (see services/yt_song.py's confirm_download()). Empty downloadId is sent as-is - the backend
+// just no-ops on a lookup miss (e.g. an older backend/action that predates download_id).
+void sendDownloadAck(const String& downloadId, bool success, const char* error = nullptr) {
+  JsonDocument doc;
+  doc["type"] = "download_ack";
+  doc["download_id"] = downloadId;
+  doc["success"] = success;
+  if (error) doc["error"] = error;
+  String out;
+  serializeJson(doc, out);
+  webSocket.sendTXT(out);
+}
+
 // Downloads an MP3 from `url` to `sdPath` on the SD card in 4KB chunks, then hands off to
 // playSongFile() for playback. Creates the parent directory if it doesn't exist. Blocks loop()
-// for the duration of the download (same tradeoff as handleSdDownload / recordUntilStop).
-void downloadAndPlaySong(const String& url, const String& sdPath, const String& title) {
-  if (!sdReady) { Serial.println("[dl] SD card not ready"); return; }
+// for the duration of the download (same tradeoff as handleSdDownload / recordUntilStop). Sends a
+// download_ack at every exit point so the backend can gate its index update / temp-file cleanup
+// on whether the SD write actually succeeded.
+void downloadAndPlaySong(const String& url, const String& sdPath, const String& title, const String& downloadId) {
+  if (!sdReady) {
+    Serial.println("[dl] SD card not ready");
+    sendDownloadAck(downloadId, false, "sd_not_ready");
+    return;
+  }
 
   // Ensure the parent directory exists (e.g. /Naveen/songs/Downloads/)
   int lastSlash = sdPath.lastIndexOf('/');
@@ -1615,10 +1715,13 @@ void downloadAndPlaySong(const String& url, const String& sdPath, const String& 
     SD_MMC.mkdir(dir);
   }
 
-  // Skip download if the file already exists on the SD card
+  // Skip download if the file already exists on the SD card. Still ack success=true - the
+  // backend holds a temp copy + pending-download registry entry for this request that needs
+  // cleanup/index-update regardless of whether the SD write itself happened just now.
   if (SD_MMC.exists(sdPath)) {
     Serial.printf("[dl] already on SD card: %s - playing directly\n", sdPath.c_str());
     playSongFile(sdPath, title);
+    sendDownloadAck(downloadId, true);
     return;
   }
 
@@ -1627,7 +1730,18 @@ void downloadAndPlaySong(const String& url, const String& sdPath, const String& 
   drawLabel("DOWNLOADING");
 
   HTTPClient http;
-  http.begin(url);
+  WiFiClientSecure secureClient;
+  if (url.startsWith("https://")) {
+    // Direct-link downloads (Tavily-found, pre-yt-dlp) were commonly plain http://, but our own
+    // /api/media/... URLs are always https (cloudflared only fronts 443) - route those through an
+    // explicit WiFiClientSecure rather than relying on HTTPClient::begin(String) to auto-upgrade,
+    // which is inconsistent across arduino-esp32 core versions. setInsecure() skips cert
+    // validation (no pinning) since cloudflared's edge cert isn't something to pin against here.
+    secureClient.setInsecure();
+    http.begin(secureClient, url);
+  } else {
+    http.begin(url);
+  }
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   http.setTimeout(30000);
   int httpCode = http.GET();
@@ -1636,6 +1750,7 @@ void downloadAndPlaySong(const String& url, const String& sdPath, const String& 
     Serial.printf("[dl] HTTP %d for %s\n", httpCode, url.c_str());
     http.end();
     setDisplayError(ERR_API);
+    sendDownloadAck(downloadId, false, "http_error");
     return;
   }
 
@@ -1646,19 +1761,22 @@ void downloadAndPlaySong(const String& url, const String& sdPath, const String& 
     Serial.printf("[dl] failed to open %s for writing\n", sdPath.c_str());
     http.end();
     setDisplayError(ERR_API);
+    sendDownloadAck(downloadId, false, "sd_open_failed");
     return;
   }
 
   const size_t BUF_SIZE = 4096;
   uint8_t buf[BUF_SIZE];
   int totalWritten = 0;
+  bool writeFailed = false;
   while (http.connected() && (contentLength < 0 || totalWritten < contentLength)) {
     size_t avail = stream->available();
     if (avail == 0) { delay(1); continue; }
     size_t toRead = (avail < BUF_SIZE) ? avail : BUF_SIZE;
     int bytesRead = stream->read(buf, toRead);
     if (bytesRead <= 0) break;
-    outFile.write(buf, bytesRead);
+    size_t written = outFile.write(buf, bytesRead);
+    if (written != (size_t)bytesRead) { writeFailed = true; break; }
     totalWritten += bytesRead;
   }
   outFile.close();
@@ -1666,12 +1784,18 @@ void downloadAndPlaySong(const String& url, const String& sdPath, const String& 
 
   Serial.printf("[dl] saved %d bytes to %s\n", totalWritten, sdPath.c_str());
 
-  if (totalWritten > 0 && isMp3(sdPath)) {
+  // A dropped connection or a short SD write still leaves totalWritten > 0 - checking it against
+  // contentLength (when known) and the write() return value above catches a mid-stream failure
+  // that would otherwise hand playSongFile() a truncated/corrupt MP3.
+  bool sizeMismatch = contentLength >= 0 && totalWritten != contentLength;
+  if (!writeFailed && !sizeMismatch && totalWritten > 0 && isMp3(sdPath)) {
     playSongFile(sdPath, title);
+    sendDownloadAck(downloadId, true);
   } else {
-    Serial.println("[dl] download appears empty or not an mp3");
+    Serial.println("[dl] download incomplete, write failed, or not an mp3");
     SD_MMC.remove(sdPath);
     setDisplayError(ERR_API);
+    sendDownloadAck(downloadId, false, writeFailed || sizeMismatch ? "sd_write_failed" : "empty_or_invalid");
   }
 }
 
@@ -1997,7 +2121,7 @@ void loop() {
 
   if (g_downloadPending && !waitingForReply && !musicPlaying) {
     g_downloadPending = false;
-    downloadAndPlaySong(g_downloadUrl, g_downloadPath, g_downloadTitle);
+    downloadAndPlaySong(g_downloadUrl, g_downloadPath, g_downloadTitle, g_downloadId);
     return;
   }
 

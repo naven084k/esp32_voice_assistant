@@ -37,6 +37,24 @@ def queue_device_action(thread_id: str, action: dict) -> None:
 def pop_device_action(thread_id: str) -> dict | None:
     return _pending_device_actions.pop(thread_id, None)
 
+
+# Lets a tool (download_song) build a self-referential URL (e.g. for the ESP32 to fetch a
+# yt-dlp-downloaded temp file) without knowing its own public address - the WS handler stashes the
+# Host header from the connection the ESP32 already reached us through (a cloudflared tunnel
+# hostname, which rotates on restart) at connect time. Same plain-dict-keyed-by-thread_id
+# rationale as _pending_device_actions above.
+_ws_hosts: dict[str, str] = {}
+
+
+def set_ws_host(thread_id: str, host: str | None) -> None:
+    if thread_id and host:
+        _ws_hosts[thread_id] = host
+
+
+def get_ws_host(thread_id: str) -> str | None:
+    return _ws_hosts.get(thread_id)
+
+
 DEFAULT_SYSTEM = """You are ARIA, a voice assistant for the Kumar family in Hyderabad, India. Primary user: Naveen (software engineer). You also speak with children.
 
 RESPONSE STYLE — this is voice output, not text:

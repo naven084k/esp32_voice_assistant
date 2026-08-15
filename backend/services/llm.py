@@ -115,6 +115,41 @@ async def close():
         await _conn.close()
 
 
+async def list_threads() -> list[dict]:
+    """Distinct thread_ids seen in the checkpoint DB, most recently touched first - for the
+    /data admin page. rowid ordering is used as a recency proxy since the checkpoints table
+    has no timestamp column of its own."""
+    if _conn is None:
+        raise RuntimeError("Agent not initialized — call llm.init() first.")
+    cursor = await _conn.execute(
+        "SELECT thread_id, COUNT(*) AS checkpoints, MAX(rowid) AS last_row "
+        "FROM checkpoints GROUP BY thread_id ORDER BY last_row DESC"
+    )
+    rows = await cursor.fetchall()
+    return [{"thread_id": r[0], "checkpoints": r[1]} for r in rows]
+
+
+async def get_thread_messages(thread_id: str) -> list[dict] | None:
+    """Full message history for a thread (role/content pairs), or None if the thread has no
+    recorded state at all."""
+    if _agent is None:
+        raise RuntimeError("Agent not initialized — call llm.init() first.")
+    state = await _agent.aget_state({"configurable": {"thread_id": thread_id}})
+    messages = state.values.get("messages")
+    if not messages:
+        return None
+    return [{"role": getattr(m, "type", "unknown"), "content": _content_to_text(m.content)} for m in messages]
+
+
+async def delete_thread(thread_id: str) -> None:
+    """Clears a thread's conversation memory entirely. Thread-level only - LangGraph checkpoints
+    are versioned graph state snapshots, not a flat message list, so editing/removing a single
+    past message isn't a safe operation without going through the graph's own reducers."""
+    if _checkpointer is None:
+        raise RuntimeError("Agent not initialized — call llm.init() first.")
+    await _checkpointer.adelete_thread(thread_id)
+
+
 async def process(text: str, thread_id: str | None = None, system_prompt: str = DEFAULT_SYSTEM) -> str:
     if _agent is None:
         raise RuntimeError("Agent not initialized — call llm.init() first.")

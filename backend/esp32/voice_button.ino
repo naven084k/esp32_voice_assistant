@@ -983,6 +983,22 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
         }
       } else if (t == "reply") {
         Serial.printf("ASSISTANT:\n  \"%s\"\n", (const char*)(doc["text"] | ""));
+        if (g_state == STATE_IDLE) {
+          // Server-initiated push (task-due reminder - see backend/services/reminders.py) with no
+          // "transcript" (and no tap/sendAudioToBackend()) preceding it, so nothing has armed the
+          // flags drainTtsRing()'s audioEndReceived&&waitingForReply idle-return logic needs. Arm
+          // them ourselves, exactly like sendAudioToBackend()/the first-boot greet already do.
+          // Skipped outside STATE_IDLE (mid-turn or STATE_MUSIC) - the backend only pushes when it
+          // believes this connection is idle, but g_state is the device's own, more precise view;
+          // if a song happens to be playing, that TTS gets silently dropped (see drainTtsRing()'s
+          // ring-buffer backpressure) rather than colliding with it - the backend retries later.
+          waitingForReply = true;
+          audioEndReceived = false;
+          speakingShown = false;
+          ttsPrebufferPrimed = false;
+          fadeInSamplesRemaining = 0;
+          updateDisplay(STATE_PROCESSING);
+        }
       } else if (t == "audio_end") {
         if (ignoreIncomingAudio) {
           // This is the boundary marker for the turn we barged in on - everything

@@ -112,6 +112,67 @@ def _load_songs() -> list[dict]:
         c.close()
 
 
+def list_songs() -> list[dict]:
+    """Public read-only wrapper around _load_songs() - for the /data admin page."""
+    return _load_songs()
+
+
+# Editable columns for update_song() - excludes "id" (the primary key, never repointed by an
+# edit) and whitelists exactly the table's columns so user-supplied field names from the admin
+# API can't be interpolated into the UPDATE statement's column list.
+_EDITABLE_COLUMNS = {
+    "title", "album", "path", "language", "category", "genre", "moods", "themes",
+    "energy", "tempo", "description", "keywords", "voice_aliases",
+}
+
+
+def update_song(song_id: str, **fields) -> dict | None:
+    """Partial update of an existing song's metadata (admin page edit). Only keys present in
+    `fields` are changed; list-valued fields are re-encoded as JSON. Returns the updated row, or
+    None if song_id doesn't exist. Clears the LRU cache so the edit is visible immediately."""
+    c = _conn()
+    try:
+        existing = c.execute("SELECT * FROM songs WHERE id=?", (song_id,)).fetchone()
+        if not existing:
+            return None
+
+        sets, vals = [], []
+        for key, value in fields.items():
+            if key not in _EDITABLE_COLUMNS:
+                continue
+            if key in _LIST_COLUMNS:
+                value = json.dumps(value or [])
+            sets.append(f"{key}=?")
+            vals.append(value)
+        if sets:
+            vals.append(song_id)
+            c.execute(f"UPDATE songs SET {', '.join(sets)} WHERE id=?", vals)
+            c.commit()
+
+        updated = c.execute("SELECT * FROM songs WHERE id=?", (song_id,)).fetchone()
+    finally:
+        c.close()
+
+    _load_songs.cache_clear()
+    return _row_to_song(updated)
+
+
+def delete_song(song_id: str) -> bool:
+    """Removes a song from the index (admin page delete). Returns False if song_id didn't
+    exist. Doesn't touch the underlying SD-card file - index only."""
+    c = _conn()
+    try:
+        cur = c.execute("DELETE FROM songs WHERE id=?", (song_id,))
+        c.commit()
+        deleted = cur.rowcount > 0
+    finally:
+        c.close()
+
+    if deleted:
+        _load_songs.cache_clear()
+    return deleted
+
+
 def _song_path(song: dict) -> str:
     # Optional per-song override: set "path" (relative to SONGS_ROOT) in the index for any entry
     # whose real on-card filename doesn't cleanly match "{album}/{title}.mp3" - e.g. files kept

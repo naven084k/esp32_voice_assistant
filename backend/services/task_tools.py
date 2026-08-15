@@ -61,7 +61,8 @@ def _conn() -> sqlite3.Connection:
                 due_at       TEXT DEFAULT '',
                 status       TEXT DEFAULT 'pending',
                 created_at   TEXT DEFAULT (datetime('now','localtime')),
-                completed_at TEXT DEFAULT ''
+                completed_at TEXT DEFAULT '',
+                reminded_at  TEXT DEFAULT ''
             );
         """)
         if "todos" in existing:
@@ -79,6 +80,11 @@ def _conn() -> sqlite3.Connection:
                 FROM reminders
             """)
             c.execute("DROP TABLE reminders")
+        c.commit()
+    elif "reminded_at" not in {r[1] for r in c.execute("PRAGMA table_info(tasks)")}:
+        # DB predates the proactive-reminder feature (services/reminders.py) - add the tracking
+        # column so get_due_reminders() below has somewhere to record "already spoken".
+        c.execute("ALTER TABLE tasks ADD COLUMN reminded_at TEXT DEFAULT ''")
         c.commit()
     return c
 
@@ -191,6 +197,13 @@ def _rows_for_filter(c: sqlite3.Connection, filter: str):
         return c.execute("SELECT * FROM tasks ORDER BY status, due_at, id").fetchall()
 
 
+def list_tasks_raw(filter: str = "all") -> list[dict]:
+    """Structured task rows for the /data admin page - list_tasks() below returns a
+    natural-language string for voice output, this returns plain dicts for a table UI."""
+    c = _conn()
+    return [dict(r) for r in _rows_for_filter(c, filter)]
+
+
 @tool
 def list_tasks(filter: str = "pending") -> str:
     """List tasks — covers both todos and reminders.
@@ -277,6 +290,7 @@ def update_task(title_or_id: str, new_title: str = "", due: str = "", priority: 
         fields.append("title=?"); vals.append(new_title.strip())
     if due:
         fields.append("due_at=?"); vals.append(_parse_due(due))
+        fields.append("reminded_at=?"); vals.append("")  # rescheduled - eligible to remind again
     if priority:
         fields.append("priority=?"); vals.append(priority.lower())
     if not fields:
@@ -301,3 +315,26 @@ def check_due_tasks() -> str:
         return "No tasks due."
     lines = [f"• {r['title']} (was due {r['due_at']})" for r in rows]
     return f"You have {len(rows)} overdue task(s):\n" + "\n".join(lines)
+
+
+def get_due_reminders() -> list[dict]:
+    """Time-specific pending tasks whose due time has passed and haven't been spoken yet - for
+    services/reminders.py's proactive ESP32 push. Unlike check_due_tasks (an LLM tool, called only
+    when asked, doesn't track delivery), this is paired with mark_reminded() so each reminder is
+    spoken at most once."""
+    c = _conn()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    rows = c.execute(
+        "SELECT * FROM tasks WHERE status='pending' AND length(due_at)>10 AND due_at<=? "
+        "AND (reminded_at IS NULL OR reminded_at='') ORDER BY due_at",
+        (now,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def mark_reminded(task_id: int) -> None:
+    """Records that a reminder was actually spoken for this task, so get_due_reminders() above
+    won't return it again. Rescheduling the task (update_task's `due`) clears this."""
+    c = _conn()
+    c.execute("UPDATE tasks SET reminded_at=datetime('now','localtime') WHERE id=?", (task_id,))
+    c.commit()

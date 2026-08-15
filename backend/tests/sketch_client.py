@@ -385,6 +385,13 @@ class SketchClient:
                 print(f"\n  You  : {data['text']}")
             elif t == "reply":
                 print(f"  ARIA : {data['text']}")
+                if self.state == "IDLE":
+                    # Server-initiated push (task-due reminder) - no tap preceded this, so no
+                    # player has been started yet; mirror send_greet()/send_audio()'s setup so
+                    # the audio that follows actually gets played instead of silently dropped.
+                    self.state = "PROCESSING"
+                    self.waiting_for_reply = True
+                    self.player_q, self.player_thread = self._start_player()
             elif t == "radio":
                 self.start_radio(data.get("url", ""), data.get("name", ""))
             elif t == "stop_radio":

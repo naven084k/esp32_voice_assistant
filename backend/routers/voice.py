@@ -2,6 +2,9 @@ import asyncio
 import json
 import logging
 import uuid
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 
@@ -12,6 +15,8 @@ router = APIRouter()
 logger = logging.getLogger("voice_agent.voice")
 
 SUPPORTED_TYPES = {"audio/wav", "audio/mpeg", "audio/mp4", "audio/webm", "audio/ogg", "application/octet-stream"}
+
+_IST = ZoneInfo("Asia/Kolkata")
 
 
 @router.post("/voice/chat")
@@ -65,6 +70,9 @@ async def voice_ws(websocket: WebSocket):
         - text frame {"type": "download_ack", "download_id": "...", "success": true|false} — the
           device's own write-confirmation for a "download_song" action (see services/yt_song.py),
           independent of any turn - handled inline below rather than inside run_turn()
+        - text frame {"type": "greet"}       — sent once by the device on its first successful
+          connect since boot; replies with a static, time-of-day-aware greeting (no STT, no LLM
+          call, so it starts speaking immediately) so ARIA proactively greets with no tap required
       Server → client:
         - text frame {"type": "transcript", "text": "..."}
         - text frame {"type": "reply", "text": "..."}
@@ -135,6 +143,32 @@ async def voice_ws(websocket: WebSocket):
             if t:
                 t.log_table()
 
+    async def run_greeting_turn(cfg: dict):
+        """Sibling to run_turn() for the device's one-time {"type": "greet"} on first connect
+        since boot — static text rather than an llm.process() call, so the greeting starts
+        speaking immediately instead of waiting on a model round-trip."""
+        try:
+            hour = datetime.now(_IST).hour
+            period = "morning" if hour < 12 else "afternoon" if hour < 17 else "evening"
+            reply = (
+                f"Good {period}! I'm Tara. Tap and speak anytime — I can chat, play music, "
+                f"set reminders, and more."
+            )
+            await websocket.send_json({"type": "reply", "text": reply})
+
+            async for chunk in tts.synthesize_stream(reply, cfg["voice"], pace=True):
+                await websocket.send_bytes(chunk)
+
+            await websocket.send_json({"type": "audio_end"})
+        except WebSocketDisconnect:
+            raise  # bubble up to outer handler — client left cleanly
+        except Exception as e:
+            logger.error(f"[ws/voice] greeting turn failed (thread={cfg['thread_id']}): {e}", exc_info=True)
+            try:
+                await websocket.send_json({"type": "error", "detail": str(e)})
+            except Exception:
+                pass  # connection may already be closed
+
     async def cancel_turn_task():
         """Abort whatever turn is currently in flight and swallow its cancellation/whatever
         exception it was already failing with — used by both "interrupt" and (defensively) a
@@ -188,6 +222,10 @@ async def voice_ws(websocket: WebSocket):
                     audio_buffer.clear()
                     turn_task = asyncio.create_task(run_turn(audio_bytes, dict(config)))
 
+                elif mtype == "greet":
+                    await cancel_turn_task()  # defensive, mirrors the "end" branch
+                    turn_task = asyncio.create_task(run_greeting_turn(dict(config)))
+
                 elif mtype == "download_ack":
                     # Independent of any turn - the device sends this whenever it finishes writing
                     # (or fails to write) a download_song action to SD card, possibly long after
@@ -200,7 +238,9 @@ async def voice_ws(websocket: WebSocket):
         pass
     finally:
         await cancel_turn_task()
-        # Any download still awaiting an ack for this connection never will get one now - clean up
-        # its temp file/registry entry rather than leaking it until _sweep_stale()'s age-based backstop.
-        yt_song.cleanup_thread(config["thread_id"])
+        # Deliberately NOT cleaning up any download still pending for this connection here - the
+        # ESP32's download itself completes over a separate HTTP connection, so a WS drop doesn't
+        # mean the download failed; the ack can legitimately arrive after the device reconnects.
+        # yt_song._sweep_stale() (age-based, run opportunistically on the next download request)
+        # is the sole backstop for downloads that are genuinely abandoned.
         llm.clear_ws_host(config["thread_id"])

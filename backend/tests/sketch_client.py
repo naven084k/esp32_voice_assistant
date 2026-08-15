@@ -6,6 +6,8 @@ Uses the host mic/speaker instead of the INMP441/MAX98357A, and Enter-key presse
 instead of the touch pad. Push-to-talk: Enter to start recording, Enter to stop
 and send.
 
+    On connect: sends {"type": "greet"} once, mirroring the ESP32's own first-connect-since-boot
+    greeting (no Enter press needed) - so playback starts immediately on launch.
     IDLE --(Enter)--> RECORDING
     RECORDING --(Enter)--> send audio --> PROCESSING --> SPEAKING
     SPEAKING --(reply finishes)--> IDLE
@@ -138,6 +140,17 @@ class SketchClient:
             self.tap_event.set()
 
     # ---- state transitions -------------------------------------------------------------------
+
+    async def send_greet(self):
+        """Mirrors the ESP32 firmware's one-time {"type": "greet"} on its first successful
+        connect since boot (see routers/voice.py's run_greeting_turn) - one SketchClient
+        instance = one "boot session", so this fires exactly once per script run. Starts the
+        player before sending, not after (unlike send_audio()), since the static-text greeting
+        has no LLM round-trip to absorb the setup delay."""
+        self.state = "PROCESSING"
+        self.waiting_for_reply = True
+        self.player_q, self.player_thread = self._start_player()
+        await self.ws.send(json.dumps({"type": "greet"}))
 
     async def handle_tap(self):
         if self.music_playing:
@@ -429,6 +442,7 @@ async def run(args):
         print("Ctrl+C to quit.\n")
 
         client = SketchClient(ws, loop, args)
+        await client.send_greet()
 
         device_info = sd.query_devices(args.input_device, kind="input") if args.input_device is not None \
             else sd.query_devices(sd.default.device[0], kind="input")

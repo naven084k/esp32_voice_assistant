@@ -1,15 +1,25 @@
 """
-Local song library lookup - matches spoken text against a pre-built JSON index
-(`data/songs_index.json`) of the tracks already on the ESP32's SD card, and resolves a match to its
-on-card path. Unlike `radio.py`/Tavily-backed `download_song`, this never hits the network - the
-index and the SD layout are both static, prepared ahead of time.
+Local song library lookup - matches spoken text against a SQLite index (`data/songs_index.db`) of
+the tracks already on the ESP32's SD card, and resolves a match to its on-card path. Unlike
+`radio.py`/Tavily-backed `download_song`, this never hits the network - the index and the SD layout
+are both static, prepared ahead of time.
+
+The index used to be a hand-edited JSON file (`SONGS_INDEX_PATH`); on first connection, if the
+`songs` table doesn't exist yet and that JSON file is present, its entries are imported once. After
+that the JSON file is never read again - edit the library via a SQLite client instead.
 """
 import difflib
 import json
 import os
 import re
+import sqlite3
 from functools import lru_cache
 
+SONGS_INDEX_DB_PATH = os.environ.get(
+    "SONGS_INDEX_DB_PATH", os.path.join(os.path.dirname(__file__), "..", "data", "songs_index.db")
+)
+# Legacy hand-edited JSON index - read only, once, to seed SONGS_INDEX_DB_PATH the first time
+# it's created. Irrelevant afterward.
 SONGS_INDEX_PATH = os.environ.get(
     "SONGS_INDEX_PATH", os.path.join(os.path.dirname(__file__), "..", "data", "songs_index.json")
 )
@@ -17,18 +27,96 @@ SONGS_ROOT = os.environ.get("SONGS_ROOT", "/Naveen/songs").rstrip("/")
 
 _MATCH_THRESHOLD = 0.45
 
+_LIST_COLUMNS = ("genre", "moods", "themes", "keywords", "voice_aliases")
+
+
+def _conn() -> sqlite3.Connection:
+    db_path = SONGS_INDEX_DB_PATH
+    os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
+    c = sqlite3.connect(db_path)
+    c.row_factory = sqlite3.Row
+    existing = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if "songs" not in existing:
+        c.executescript("""
+            CREATE TABLE songs (
+                id            TEXT PRIMARY KEY,
+                title         TEXT NOT NULL,
+                album         TEXT NOT NULL,
+                path          TEXT DEFAULT '',
+                language      TEXT DEFAULT 'Unknown',
+                category      TEXT DEFAULT '',
+                genre         TEXT DEFAULT '[]',
+                moods         TEXT DEFAULT '[]',
+                themes        TEXT DEFAULT '[]',
+                energy        TEXT DEFAULT 'medium',
+                tempo         TEXT DEFAULT 'medium',
+                description   TEXT DEFAULT '',
+                keywords      TEXT DEFAULT '[]',
+                voice_aliases TEXT DEFAULT '[]'
+            );
+        """)
+        if os.path.isfile(SONGS_INDEX_PATH):
+            with open(SONGS_INDEX_PATH, encoding="utf-8") as f:
+                legacy_songs = json.load(f)["songs"]
+            # A handful of entries in the legacy JSON share the same auto-generated "id" slug
+            # despite being distinct tracks (e.g. a Remix/Reprise of the same title) - disambiguate
+            # rather than dropping them via INSERT OR IGNORE, which would silently lose real songs.
+            seen_ids: dict[str, int] = {}
+            for song in legacy_songs:
+                song_id = song["id"]
+                if song_id in seen_ids:
+                    seen_ids[song_id] += 1
+                    song = {**song, "id": f"{song_id}_{seen_ids[song_id]}"}
+                else:
+                    seen_ids[song_id] = 1
+                _insert_song(c, song)
+        c.commit()
+    return c
+
+
+def _insert_song(c: sqlite3.Connection, song: dict) -> None:
+    # OR IGNORE: the legacy JSON index has a handful of duplicate "id" values (a pre-existing
+    # data-quality quirk) - skip repeats during the one-time import rather than aborting it.
+    # add_song() already checks for an existing id before calling this, so it never relies on
+    # the IGNORE for its own inserts.
+    c.execute(
+        """
+        INSERT OR IGNORE INTO songs (id, title, album, path, language, category, genre, moods,
+                                      themes, energy, tempo, description, keywords, voice_aliases)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            song["id"], song["title"], song["album"], song.get("path", ""),
+            song.get("language", "Unknown"), song.get("category", ""),
+            json.dumps(song.get("genre", [])), json.dumps(song.get("moods", [])),
+            json.dumps(song.get("themes", [])), song.get("energy", "medium"),
+            song.get("tempo", "medium"), song.get("description", ""),
+            json.dumps(song.get("keywords", [])), json.dumps(song.get("voice_aliases", [])),
+        ),
+    )
+
+
+def _row_to_song(row: sqlite3.Row) -> dict:
+    song = dict(row)
+    for col in _LIST_COLUMNS:
+        song[col] = json.loads(song[col] or "[]")
+    return song
+
 
 @lru_cache(maxsize=1)
 def _load_songs() -> list[dict]:
-    with open(SONGS_INDEX_PATH, encoding="utf-8") as f:
-        return json.load(f)["songs"]
+    c = _conn()
+    try:
+        return [_row_to_song(r) for r in c.execute("SELECT * FROM songs")]
+    finally:
+        c.close()
 
 
 def _song_path(song: dict) -> str:
-    # Optional per-song override: set "path" (relative to SONGS_ROOT) in songs_index.json for any
-    # entry whose real on-card filename doesn't cleanly match "{album}/{title}.mp3" - e.g. files
-    # kept with their original download-site names (track number prefix, "[www.site.com]" suffix)
-    # or sitting flat in SONGS_ROOT with no album subfolder.
+    # Optional per-song override: set "path" (relative to SONGS_ROOT) in the index for any entry
+    # whose real on-card filename doesn't cleanly match "{album}/{title}.mp3" - e.g. files kept
+    # with their original download-site names (track number prefix, "[www.site.com]" suffix) or
+    # sitting flat in SONGS_ROOT with no album subfolder.
     if song.get("path"):
         return f"{SONGS_ROOT}/{song['path']}"
     return f"{SONGS_ROOT}/{song['album']}/{song['title']}.mp3"
@@ -47,45 +135,43 @@ def _to_result(song: dict) -> dict:
 
 
 def add_song(title: str, filename: str, album: str | None = None) -> dict:
-    """Append a new song to the index and return the entry. `album` becomes both the on-card
+    """Insert a new song into the index and return the entry. `album` becomes both the on-card
     subfolder and the index's album field - defaults to "Downloads" when the caller has no real
     album/artist metadata for the track. Clears the LRU cache so subsequent find_song() calls see
     it immediately."""
-    with open(SONGS_INDEX_PATH, encoding="utf-8") as f:
-        data = json.load(f)
-
     slug = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")
     song_id = f"downloads_{slug}"
 
-    for existing in data["songs"]:
-        if existing["id"] == song_id:
-            return _to_result(existing)
+    c = _conn()
+    try:
+        existing = c.execute("SELECT * FROM songs WHERE id=?", (song_id,)).fetchone()
+        if existing:
+            return _to_result(_row_to_song(existing))
 
-    album = album or "Downloads"
-    entry = {
-        "id": song_id,
-        "title": title,
-        "album": album,
-        "path": f"{album}/{filename}",
-        "language": "Unknown",
-        "category": "Downloaded",
-        "genre": [],
-        "moods": [],
-        "themes": [],
-        "energy": "medium",
-        "tempo": "medium",
-        "description": f"Downloaded track: {title}",
-        "keywords": [w for w in title.lower().split() if len(w) > 1],
-        "voice_aliases": [
-            f"play {title}",
-            f"play {title.lower()}",
-        ],
-    }
-    data["songs"].append(entry)
-    data["count"] = len(data["songs"])
-
-    with open(SONGS_INDEX_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+        album = album or "Downloads"
+        entry = {
+            "id": song_id,
+            "title": title,
+            "album": album,
+            "path": f"{album}/{filename}",
+            "language": "Unknown",
+            "category": "Downloaded",
+            "genre": [],
+            "moods": [],
+            "themes": [],
+            "energy": "medium",
+            "tempo": "medium",
+            "description": f"Downloaded track: {title}",
+            "keywords": [w for w in title.lower().split() if len(w) > 1],
+            "voice_aliases": [
+                f"play {title}",
+                f"play {title.lower()}",
+            ],
+        }
+        _insert_song(c, entry)
+        c.commit()
+    finally:
+        c.close()
 
     _load_songs.cache_clear()
     return _to_result(entry)

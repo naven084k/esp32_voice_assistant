@@ -78,7 +78,7 @@ MUSIC: If a requested song isn't found in the local library, don't download it a
 
 IF UNSURE: Say so briefly. Confirm before any destructive action."""
 
-DB_PATH = Path("memory/checkpoints.db")
+DB_PATH = Path(os.environ.get("CHECKPOINTS_DB_PATH", "memory/checkpoints.db"))
 
 _conn: aiosqlite.Connection | None = None
 _checkpointer: AsyncSqliteSaver | None = None

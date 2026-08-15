@@ -4,6 +4,7 @@ a task with a time-specific due date, so they're unified here).
 Persists to memory/tasks.db (SQLite).
 due_at is always normalised to IST before storing, regardless of how the LLM passes it.
 """
+import os
 import re
 import sqlite3
 from datetime import datetime
@@ -40,7 +41,7 @@ def _parse_due(value: str) -> str:
     return dt.strftime("%Y-%m-%d")
 
 
-_DB_PATH = Path("memory/tasks.db")
+_DB_PATH = Path(os.environ.get("TASKS_DB_PATH", "memory/tasks.db"))
 
 
 # ─── DB helpers ───────────────────────────────────────────────────────────────

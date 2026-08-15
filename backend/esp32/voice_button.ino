@@ -106,6 +106,10 @@ size_t   recBytes  = 0;
 int  g_volumePercent = 150;   // TTS playback volume: 0=mute, 100=unity gain, up to 150=boosted (may clip)
 bool wsConnected     = false;
 bool waitingForReply = false;
+bool g_greetedThisBoot = false;  // RAM-only: gates the startup greeting to once per power-on,
+                                  // but still re-fires it after a real reboot (unlike NVS, this
+                                  // naturally survives WiFi-drop WS reconnects since setup() never
+                                  // re-runs for those)
 
 // True from the moment a barge-in abort happens until the interrupted turn's own
 // "audio_end" arrives on the wire. The backend keeps streaming the old reply's
@@ -921,7 +925,22 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
     case WStype_CONNECTED:
       wsConnected = true;
-      updateDisplay(STATE_IDLE);
+      // Don't clobber the music-bars screen if a song is already playing (e.g. a download's
+      // blocking transfer starved webSocket.loop() long enough that reconnect lands right after
+      // playSongFile() set STATE_MUSIC) - voice turns aren't in flight while music plays anyway.
+      if (!musicPlaying) updateDisplay(STATE_IDLE);
+      // First connect since boot: ask the backend for a spoken greeting, no tap needed. Mirrors
+      // the same flags sendAudioToBackend() sets after a real tap turn, so drainTtsRing()'s
+      // existing audioEndReceived&&waitingForReply idle-return logic handles this unmodified.
+      if (!g_greetedThisBoot && !musicPlaying) {
+        g_greetedThisBoot = true;
+        waitingForReply = true;
+        audioEndReceived = false;
+        speakingShown = false;
+        ttsPrebufferPrimed = false;
+        fadeInSamplesRemaining = 0;
+        webSocket.sendTXT("{\"type\":\"greet\"}");
+      }
       Serial.println("[WS] connected to backend");
       break;
 
@@ -935,7 +954,10 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
       fadeInSamplesRemaining = 0;
       pendingSpeakingDisplay = false;
       ttsHead = ttsTail = ttsFill = 0;   // discard any partial audio from the interrupted turn
-      setDisplayError(ERR_WIFI);
+      // Same reasoning as above - a stale disconnect discovered right after a download's blocking
+      // transfer shouldn't overwrite the music-bars screen with the WIFI LOST icon; audio itself
+      // is unaffected either way since playback never depended on the WS connection.
+      if (!musicPlaying) setDisplayError(ERR_WIFI);
       // WiFi.status() here tells you whether this is a real WiFi drop or just the backend/
       // tunnel going away while WiFi itself is still fine - both show the same "WIFI LOST"
       // icon, but only one of them is actually WiFi.
@@ -1832,7 +1854,8 @@ void sendDownloadAck(const String& downloadId, bool success) {
 // Downloads an MP3 from `url` to `sdPath` on the SD card in 4KB chunks, then hands off to
 // playSongFile() for playback. Creates the parent directory (e.g. the album folder) if it
 // doesn't exist yet. Blocks loop() for the duration of the download (same tradeoff as
-// handleSdDownload / recordUntilStop).
+// handleSdDownload / recordUntilStop), except the transfer loop below periodically services
+// webSocket.loop()/sendPing() itself so the WS doesn't go idle-timeout-dropped mid-download.
 void downloadAndPlaySong(const String& url, const String& sdPath, const String& title, const String& downloadId) {
   if (!sdReady) { Serial.println("[dl] SD card not ready"); sendDownloadAck(downloadId, false); return; }
 
@@ -1886,7 +1909,19 @@ void downloadAndPlaySong(const String& url, const String& sdPath, const String& 
   uint8_t buf[BUF_SIZE];
   int totalWritten = 0;
   uint32_t lastProgressMs = millis();
+  uint32_t lastWsServiceMs = millis();
   while (http.connected() && (contentLength < 0 || totalWritten < contentLength)) {
+    // Service the WS socket (and ping it) every ~2s even though this loop otherwise blocks
+    // loop() for the whole transfer - a multi-second download would otherwise leave the WS
+    // completely idle, and an idle tunnel/proxy connection gets dropped, which previously fired
+    // right as the download finished (see downloadAndPlaySong()'s header comment).
+    uint32_t nowWs = millis();
+    if (nowWs - lastWsServiceMs >= 2000) {
+      lastWsServiceMs = nowWs;
+      webSocket.loop();
+      if (wsConnected) webSocket.sendPing();
+    }
+
     size_t avail = stream->available();
     if (avail == 0) { delay(1); continue; }
     size_t toRead = (avail < BUF_SIZE) ? avail : BUF_SIZE;

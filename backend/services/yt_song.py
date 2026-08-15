@@ -24,10 +24,13 @@ MAX_AGE_SECONDS = int(os.environ.get("SONG_TEMP_MAX_AGE_SECONDS", "21600"))  # 6
 MAX_FILESIZE_BYTES = 20 * 1024 * 1024  # 20MB - safety net against a mis-ranked, oversized result
 MAX_DURATION_SECONDS = 15 * 60  # skip full albums/compilations a search might mis-rank to #1
 
-# thread_id -> {download_id, temp_path, sd_filename, title, created_at} for downloads still
-# awaiting an ESP32 write-confirmation. Plain dict (not a ContextVar) for the same reason
-# services.llm's _pending_device_actions is: set from inside a tool call, read later from the WS
-# handler, potentially in a different asyncio Task.
+# download_id -> {temp_path, sd_filename, title, album, created_at} for downloads still awaiting
+# an ESP32 write-confirmation. Plain dict (not a ContextVar) for the same reason services.llm's
+# _pending_device_actions is: set from inside a tool call, read later from the WS handler,
+# potentially in a different asyncio Task. Not keyed or cleaned up by thread_id/WS connection -
+# the ack can legitimately arrive after the WS that queued the download has dropped and
+# reconnected (the download itself completes over a separate HTTP connection, so a WS blip
+# doesn't mean the download failed); _sweep_stale() is the sole backstop for truly abandoned ones.
 _pending: dict[str, dict] = {}
 
 
@@ -138,14 +141,13 @@ async def search_and_download(query: str) -> dict | None:
 
 
 def register_pending(
-    download_id: str, *, temp_path: str, sd_filename: str, title: str, album: str, thread_id: str,
+    download_id: str, *, temp_path: str, sd_filename: str, title: str, album: str,
 ) -> None:
     _pending[download_id] = {
         "temp_path": temp_path,
         "sd_filename": sd_filename,
         "title": title,
         "album": album,
-        "thread_id": thread_id,
         "created_at": time.time(),
     }
 
@@ -207,20 +209,3 @@ def confirm_download(download_id: str, success: bool) -> None:
         pass
     except OSError as e:
         logger.warning(f"[yt_song] failed to remove temp file {entry['temp_path']}: {e}")
-
-
-def cleanup_thread(thread_id: str) -> None:
-    """Deletes temp files/registry entries for any downloads still pending for this thread_id
-    (e.g. the WS connection dropped before an ack arrived) - never touches the song index, since
-    no confirmation was received."""
-    stale_ids = [did for did, entry in _pending.items() if entry["thread_id"] == thread_id]
-    for download_id in stale_ids:
-        entry = _pending.pop(download_id, None)
-        if not entry:
-            continue
-        try:
-            os.remove(entry["temp_path"])
-        except FileNotFoundError:
-            pass
-        except OSError as e:
-            logger.warning(f"[yt_song] failed to remove temp file {entry['temp_path']}: {e}")

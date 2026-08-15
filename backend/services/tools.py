@@ -72,7 +72,7 @@ async def download_song(song: str) -> str:
     register_pending(
         download_id,
         temp_path=result["temp_path"], sd_filename=result["sd_filename"],
-        title=result["title"], album=result["album"], thread_id=thread_id,
+        title=result["title"], album=result["album"],
     )
     url = build_download_url(thread_id, download_id)
     if not url:

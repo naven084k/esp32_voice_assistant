@@ -60,6 +60,7 @@
 #define SD_MMC_CMD      38
 #define SD_MMC_D0       40    // 1-bit mode - only D0 wired; pass false to SD_MMC.begin() for 4-bit if D1-D3 are too
 #define SD_SERVER_PORT  8080  // separate port from the WiFi-setup portal's WebServer (port 80, AP-mode only)
+#define SONGS_ROOT      "/Naveen/songs"  // matches the backend's own SONGS_ROOT default (services/song_index.py)
 
 #define NTP_SERVER      "pool.ntp.org"
 #define GMT_OFFSET_SEC  19800 // IST (Hyderabad) = UTC+5:30 = 5*3600 + 30*60
@@ -983,22 +984,6 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
         }
       } else if (t == "reply") {
         Serial.printf("ASSISTANT:\n  \"%s\"\n", (const char*)(doc["text"] | ""));
-        if (g_state == STATE_IDLE) {
-          // Server-initiated push (task-due reminder - see backend/services/reminders.py) with no
-          // "transcript" (and no tap/sendAudioToBackend()) preceding it, so nothing has armed the
-          // flags drainTtsRing()'s audioEndReceived&&waitingForReply idle-return logic needs. Arm
-          // them ourselves, exactly like sendAudioToBackend()/the first-boot greet already do.
-          // Skipped outside STATE_IDLE (mid-turn or STATE_MUSIC) - the backend only pushes when it
-          // believes this connection is idle, but g_state is the device's own, more precise view;
-          // if a song happens to be playing, that TTS gets silently dropped (see drainTtsRing()'s
-          // ring-buffer backpressure) rather than colliding with it - the backend retries later.
-          waitingForReply = true;
-          audioEndReceived = false;
-          speakingShown = false;
-          ttsPrebufferPrimed = false;
-          fadeInSamplesRemaining = 0;
-          updateDisplay(STATE_PROCESSING);
-        }
       } else if (t == "audio_end") {
         if (ignoreIncomingAudio) {
           // This is the boundary marker for the turn we barged in on - everything
@@ -1430,6 +1415,37 @@ void listSdDirTiles(const String& dirname, String& html) {
   root.close();
 }
 
+// Recursively walks `dirname` (called with SONGS_ROOT) collecting every .mp3 into one flat list,
+// each rendered as a tile whose tile itself IS the play control - clicking it hits /music/play
+// (below) rather than navigating/downloading, unlike listSdDirTiles()'s one-level-at-a-time
+// folder browsing. Keeping the parent directory's File handle open across the recursive call is
+// the same pattern deleteRecursive() already relies on being safe on this FS layer - only the
+// *child* handle (`entry`) needs to be closed first.
+void listSongTiles(const String& dirname, String& html) {
+  File dir = SD_MMC.open(dirname);
+  if (!dir || !dir.isDirectory()) return;
+
+  File entry = dir.openNextFile();
+  while (entry) {
+    String name = entry.name();
+    String fullPath = name.startsWith("/") ? name : dirname + (dirname.endsWith("/") ? "" : "/") + name;
+    bool isDir = entry.isDirectory();
+    entry.close();
+
+    if (isDir) {
+      listSongTiles(fullPath, html);
+    } else if (isMp3(fullPath)) {
+      String leaf = fullPath.substring(fullPath.lastIndexOf('/') + 1);
+      String title = leaf.substring(0, leaf.lastIndexOf('.'));
+      html += "<div class=\"tile\"><a class=\"open\" href=\"/music/play?path=" + fullPath +
+              "&title=" + title + "\">"
+              "<div class=\"icon\">&#127925;</div><div class=\"name\">" + title + "</div></a></div>";
+    }
+    entry = dir.openNextFile();
+  }
+  dir.close();
+}
+
 void handleHome() {
   String body = "<h3>ARIA</h3>";
   if (!sdReady) {
@@ -1609,8 +1625,35 @@ void handleMusicPage() {
     }
     body += "</div>";
   }
+  body += "<h3>All Songs</h3>";
+  if (!sdReady) {
+    body += "<p class=\"sub\">SD card not mounted.</p>";
+  } else {
+    body += "<div class=\"grid\">";
+    listSongTiles(SONGS_ROOT, body);
+    body += "</div>";
+  }
   fileServer.send(200, "text/html",
                    htmlPage("Music", "music", body, "<meta http-equiv=\"refresh\" content=\"5\">"));
+}
+
+// Tapping a tile in the "All Songs" list above hits this - same deferred g_pendingSong*/
+// g_songPending handoff to loop() that the play_song WS message uses (see webSocketEvent()),
+// just triggered from the file-browser WebServer instead of the voice pipeline.
+void handleMusicPlay() {
+  String path  = fileServer.hasArg("path")  ? fileServer.arg("path")  : "";
+  String title = fileServer.hasArg("title") ? fileServer.arg("title") : "";
+  if (sdReady && path.length() && isMp3(path)) {
+    g_songQueueCount   = 0;   // fresh single-song request replaces any playlist still queued
+    g_songHistoryCount = 0;   // ...and its "prev" history too
+    g_pendingSongPath  = path;
+    g_pendingSongTitle = title.length() ? title : path.substring(path.lastIndexOf('/') + 1);
+    g_songPending = true;
+    Serial.printf("[music] play queued from /music page: %s (%s)\n",
+                  g_pendingSongTitle.c_str(), path.c_str());
+  }
+  fileServer.sendHeader("Location", "/music");
+  fileServer.send(303);
 }
 
 void handleMusicNext() {
@@ -1725,6 +1768,7 @@ void initSdFileServer() {
   fileServer.on("/upload", HTTP_POST, handleUploadDone, handleFileUpload);
   fileServer.on("/delete", HTTP_POST, handleSdDelete);
   fileServer.on("/music", HTTP_GET, handleMusicPage);
+  fileServer.on("/music/play", HTTP_GET, handleMusicPlay);
   fileServer.on("/music/next", HTTP_GET, handleMusicNext);
   fileServer.on("/music/prev", HTTP_GET, handleMusicPrev);
   fileServer.on("/music/pause", HTTP_GET, handleMusicPauseToggle);
@@ -1876,7 +1920,7 @@ void downloadAndPlaySong(const String& url, const String& sdPath, const String& 
   if (!sdReady) { Serial.println("[dl] SD card not ready"); sendDownloadAck(downloadId, false); return; }
 
   // Ensure the parent directory exists (e.g. /Naveen/songs/<album>/) - a single mkdir() is
-  // enough since SONGS_ROOT ("/Naveen/songs") itself is already guaranteed to exist.
+  // enough since SONGS_ROOT itself is already guaranteed to exist.
   int lastSlash = sdPath.lastIndexOf('/');
   if (lastSlash > 0) {
     String dir = sdPath.substring(0, lastSlash);

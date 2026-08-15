@@ -184,7 +184,7 @@ _PAGE = """<!DOCTYPE html>
   .msg.system { background: #1c1f26; color: #8a8f99; }
   .msg.tool { background: #241c14; color: #d7b98a; }
   .msg .role { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: #6b7280; margin-bottom: 3px; }
-  textarea, .editfield input {
+  textarea, .editfield input, .editfield select {
     width: 100%; padding: 6px 8px; border-radius: 6px; border: 1px solid #2c313c;
     background: #0f1115; color: #e6e6e6; font-size: 12px; margin-bottom: 6px;
   }
@@ -246,7 +246,7 @@ _PAGE = """<!DOCTYPE html>
       <div class="panel" id="panel-tasks">
         <div class="toolbar">
           <input id="taskTitle" placeholder="Title">
-          <input id="taskDue" placeholder="Due (e.g. tomorrow 3pm)">
+          <input id="taskDue" type="datetime-local">
           <select id="taskPriority"><option>low</option><option selected>normal</option><option>high</option></select>
           <button class="primary" onclick="createTask()">Add task</button>
           <button onclick="loadTasks()">Refresh</button>
@@ -358,6 +358,17 @@ async function deleteThread(threadId) {
 }
 
 // ---- Tasks ----
+// due_at is stored as "YYYY-MM-DD HH:MM" (time-specific) or "YYYY-MM-DD" (date-only soft
+// deadline) - see services/task_tools.py's _parse_due(). <input type="datetime-local"> needs
+// "YYYY-MM-DDTHH:MM" and always carries a time, so a date-only value gets midnight filled in
+// on the way in; fromLocalDT() swaps the "T" back before it's sent to the API.
+function toLocalDT(due) {
+  if (!due) return "";
+  return (due.length > 10 ? due : due + " 00:00").replace(" ", "T");
+}
+function fromLocalDT(v) {
+  return v ? v.replace("T", " ") : "";
+}
 async function loadTasks() {
   const tasks = await api("/api/tasks?filter=all").catch(() => []);
   renderTasks(tasks);
@@ -375,29 +386,51 @@ function renderTasks(tasks) {
       <td class="muted">${esc(t.due_at) || "—"}</td>
       <td>${t.status === "completed" ? "✓ done" : "pending"}</td>
       <td class="row-actions">
-        <button onclick="editTask(${t.id})">Edit</button>
+        <button onclick="toggleEditTask(${t.id})">Edit</button>
         ${t.status !== "completed" ? `<button onclick="completeTask(${t.id})">Complete</button>` : ""}
         <button class="danger" onclick="deleteTaskRow(${t.id})">Delete</button>
       </td>`;
     tbody.appendChild(tr);
+    const editRow = document.createElement("tr");
+    editRow.id = `edit-task-${t.id}`;
+    editRow.className = "hidden";
+    editRow.innerHTML = `<td colspan="6">${taskEditForm(t)}</td>`;
+    tbody.appendChild(editRow);
   }
+}
+function taskEditForm(t) {
+  const opt = p => `<option${t.priority === p ? " selected" : ""}>${p}</option>`;
+  return `
+    <div class="editgrid">
+      <div class="editfield"><label>Title</label><input id="tf-title-${t.id}" value="${esc(t.title)}"></div>
+      <div class="editfield"><label>Due (date &amp; time)</label>
+        <input id="tf-due-${t.id}" type="datetime-local" value="${toLocalDT(t.due_at)}"></div>
+      <div class="editfield"><label>Priority</label>
+        <select id="tf-priority-${t.id}">${opt("low")}${opt("normal")}${opt("high")}</select></div>
+    </div>
+    <div class="row-actions" style="margin-top:6px;">
+      <button class="primary" onclick="saveTask(${t.id})">Save</button>
+      <button onclick="toggleEditTask(${t.id})">Cancel</button>
+    </div>`;
+}
+function toggleEditTask(id) {
+  document.getElementById(`edit-task-${id}`).classList.toggle("hidden");
+}
+async function saveTask(id) {
+  const newTitle = document.getElementById(`tf-title-${id}`).value.trim();
+  const due = fromLocalDT(document.getElementById(`tf-due-${id}`).value);
+  const priority = document.getElementById(`tf-priority-${id}`).value;
+  const { tasks } = await api(`/api/tasks/${id}`, { method: "PUT", body: JSON.stringify({ new_title: newTitle, due, priority }) });
+  renderTasks(tasks);
 }
 async function createTask() {
   const title = document.getElementById("taskTitle").value.trim();
   if (!title) return;
-  const due = document.getElementById("taskDue").value.trim();
+  const due = fromLocalDT(document.getElementById("taskDue").value);
   const priority = document.getElementById("taskPriority").value;
   const { tasks } = await api("/api/tasks", { method: "POST", body: JSON.stringify({ title, due, priority }) });
   document.getElementById("taskTitle").value = "";
   document.getElementById("taskDue").value = "";
-  renderTasks(tasks);
-}
-async function editTask(id) {
-  const newTitle = prompt("New title (blank = unchanged):", "") || "";
-  const due = prompt("New due date/time (blank = unchanged):", "") || "";
-  const priority = prompt("New priority - low/normal/high (blank = unchanged):", "") || "";
-  if (!newTitle && !due && !priority) return;
-  const { tasks } = await api(`/api/tasks/${id}`, { method: "PUT", body: JSON.stringify({ new_title: newTitle, due, priority }) });
   renderTasks(tasks);
 }
 async function completeTask(id) {

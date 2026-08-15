@@ -13,7 +13,7 @@ from services.request_timer import get_timer
 
 SAMPLE_RATE = 24000
 DEFAULT_VOICE = "en-IN-Neural2-B"
-VOLUME_GAIN_DB = 16.0  # Google's neural voices synthesize quieter than OpenAI's TTS by default (0dB); boost at the source rather than relying solely on the ESP32's digital gain, which clips more easily. This is Google's API ceiling (range: -96.0 to 16.0).
+VOLUME_GAIN_DB = 10.0  # Google's neural voices synthesize quieter than OpenAI's TTS by default (0dB); boost at the source rather than relying solely on the ESP32's digital gain, which clips more easily. Range: -96.0 to 16.0.
 
 VOICES = {
     "en-US-Neural2-A", "en-US-Neural2-C", "en-US-Neural2-D",

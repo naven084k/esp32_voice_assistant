@@ -14,18 +14,16 @@ logging.getLogger("google_genai").setLevel(logging.WARNING)
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import chat, voice, dashboard, data_admin, media
+from routers import chat, voice, dashboard, media
 from routers.telegram_bot import start_bot, stop_bot
-from services import llm, reminders
+from services import llm
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await llm.init()
     await start_bot()
-    await reminders.start()
     yield
-    await reminders.stop()
     await stop_bot()
     await llm.close()
 
@@ -42,10 +40,8 @@ app.add_middleware(
 app.include_router(chat.router, prefix="/api")
 app.include_router(voice.router, prefix="/api")
 app.include_router(dashboard.router, prefix="/api")
-app.include_router(data_admin.router, prefix="/api")
 app.include_router(media.router, prefix="/api")
 app.include_router(dashboard.page_router)
-app.include_router(data_admin.page_router)
 app.include_router(chat.page_router)
 
 

@@ -19,65 +19,6 @@ SUPPORTED_TYPES = {"audio/wav", "audio/mpeg", "audio/mp4", "audio/webm", "audio/
 _IST = ZoneInfo("Asia/Kolkata")
 
 
-class _ActiveConnection:
-    """The single currently-connected /ws/voice client (ESP32 or tests/sketch_client.py) - tracked
-    at module scope so services/reminders.py can push a spoken reminder without the device having
-    asked for one. `turn_task` mirrors whatever the connection's own run loop has in flight, so
-    speak_unprompted() below can tell whether it's actually safe to send right now."""
-
-    def __init__(self, websocket: WebSocket, config: dict):
-        self.websocket = websocket
-        self.config = config
-        self.turn_task: asyncio.Task | None = None
-
-
-_active: _ActiveConnection | None = None
-
-
-async def speak_unprompted(text: str) -> bool:
-    """Speaks `text` over the current /ws/voice connection, but only if one is connected and idle
-    (no turn already in flight) - used by services/reminders.py to announce due tasks without ever
-    interrupting an active conversation. Returns whether it was actually delivered; the caller
-    should just retry on its next poll if not.
-
-    Reuses the same {"type": "reply"} + streamed audio + {"type": "audio_end"} shape a normal turn
-    ends with (no preceding "transcript", same as the no-STT greet flow) - the ESP32 firmware arms
-    playback for it exactly the way it does for greet/replies (see voice_button.ino's "reply"
-    handler), so no separate wire message type is needed. Known limitation: the device tracks
-    music playback locally, so if a song/radio stream happens to be playing when this fires, the
-    firmware has no way to know to duck it - the reminder is skipped for now and retried later
-    once the device is idle again from the backend's point of view.
-    """
-    conn = _active
-    if conn is None or (conn.turn_task is not None and not conn.turn_task.done()):
-        return False
-
-    async def _push():
-        await conn.websocket.send_json({"type": "reply", "text": text})
-        async for chunk in tts.synthesize_stream(text, conn.config["voice"], pace=True):
-            await conn.websocket.send_bytes(chunk)
-        await conn.websocket.send_json({"type": "audio_end"})
-
-    task = asyncio.create_task(_push())
-    conn.turn_task = task
-    try:
-        await task
-        return True
-    except asyncio.CancelledError:
-        # Distinguish "the WS receive loop's cancel_turn_task() cancelled *this push*" (e.g. the
-        # user tapped to interrupt) - not delivered, but the caller (services/reminders.py's poll
-        # loop) must keep running - from "our own caller/task was cancelled" (e.g. reminders.stop()
-        # during shutdown), which does need to propagate. Task.cancelling() (3.11+) tells them apart;
-        # it's 0 here unless something cancelled the task that's *running this coroutine*, not the
-        # inner push task itself.
-        if asyncio.current_task().cancelling():
-            raise
-        return False
-    except Exception as e:
-        logger.error(f"[ws/voice] reminder push failed: {e}", exc_info=True)
-        return False
-
-
 @router.post("/voice/chat")
 async def voice_chat(
     audio: UploadFile = File(...),
@@ -144,16 +85,10 @@ async def voice_ws(websocket: WebSocket):
           {"type": "download_song", "download_id": "...", "url": "...", "title": "...", "path": "..."} /
           {"type": "play_song", "path": "...", "title": "..."} / {"type": "stop_song"}
 
-      A "reply" + audio + "audio_end" sequence can also arrive with no client message preceding it
-      at all (no "transcript") - services/reminders.py pushing a spoken task-due reminder via
-      speak_unprompted() below, only when this connection is idle. The firmware treats this exactly
-      like the no-transcript greet flow.
-
     Turn processing (STT → LLM → TTS) runs as a background task rather than being awaited inline,
     so this loop keeps reading incoming frames (in particular "interrupt") the whole time a turn is
     in flight instead of being blocked until that turn finishes.
     """
-    global _active
     await websocket.accept()
     audio_buffer = bytearray()
     config = {
@@ -161,8 +96,7 @@ async def voice_ws(websocket: WebSocket):
         "voice": tts.DEFAULT_VOICE,
         "thread_id": str(uuid.uuid4()),
     }
-    conn = _ActiveConnection(websocket, config)
-    _active = conn
+    turn_task: asyncio.Task | None = None
 
     async def run_turn(audio_bytes: bytes, cfg: dict):
         new_timer(label="ws/voice", thread_id=cfg["thread_id"])
@@ -238,15 +172,15 @@ async def voice_ws(websocket: WebSocket):
     async def cancel_turn_task():
         """Abort whatever turn is currently in flight and swallow its cancellation/whatever
         exception it was already failing with — used by both "interrupt" and (defensively) a
-        fresh "end" arriving while a previous turn is somehow still running. conn.turn_task
-        (rather than a plain local var) so speak_unprompted() can see it too."""
-        if conn.turn_task and not conn.turn_task.done():
-            conn.turn_task.cancel()
+        fresh "end" arriving while a previous turn is somehow still running."""
+        nonlocal turn_task
+        if turn_task and not turn_task.done():
+            turn_task.cancel()
             try:
-                await conn.turn_task
+                await turn_task
             except BaseException:
                 pass
-        conn.turn_task = None
+        turn_task = None
 
     try:
         while True:
@@ -266,7 +200,7 @@ async def voice_ws(websocket: WebSocket):
                     config.update({k: v for k, v in msg.items() if k in ("system_prompt", "voice", "thread_id")})
 
                 elif mtype == "interrupt":
-                    was_running = conn.turn_task is not None and not conn.turn_task.done()
+                    was_running = turn_task is not None and not turn_task.done()
                     await cancel_turn_task()
                     audio_buffer.clear()
                     if was_running:
@@ -286,11 +220,11 @@ async def voice_ws(websocket: WebSocket):
                     await cancel_turn_task()  # defensive: shouldn't normally still be running here
                     audio_bytes = bytes(audio_buffer)
                     audio_buffer.clear()
-                    conn.turn_task = asyncio.create_task(run_turn(audio_bytes, dict(config)))
+                    turn_task = asyncio.create_task(run_turn(audio_bytes, dict(config)))
 
                 elif mtype == "greet":
                     await cancel_turn_task()  # defensive, mirrors the "end" branch
-                    conn.turn_task = asyncio.create_task(run_greeting_turn(dict(config)))
+                    turn_task = asyncio.create_task(run_greeting_turn(dict(config)))
 
                 elif mtype == "download_ack":
                     # Independent of any turn - the device sends this whenever it finishes writing
@@ -310,5 +244,3 @@ async def voice_ws(websocket: WebSocket):
         # yt_song._sweep_stale() (age-based, run opportunistically on the next download request)
         # is the sole backstop for downloads that are genuinely abandoned.
         llm.clear_ws_host(config["thread_id"])
-        if _active is conn:
-            _active = None

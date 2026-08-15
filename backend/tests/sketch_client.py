@@ -14,6 +14,11 @@ and send.
     SPEAKING --(Enter)--> RECORDING (barge-in; remainder of reply is discarded)
     A queued device action after the reply (radio / download_song / play_song) --> MUSIC
     MUSIC --(Enter)--> RECORDING   MUSIC --(finishes naturally)--> IDLE
+    IDLE --(unprompted "reply" from the server, see services/reminders.py)--> PROCESSING -->
+      SPEAKING --(reply finishes, untouched)--> IDLE --(repeats every REPEAT_GAP_SECONDS until
+      dismissed)  SPEAKING --(Enter)--> IDLE (dismiss-only, unlike a normal reply's barge-in - it
+      does NOT also start recording; the backend takes this as acknowledgment and stops repeating
+      it. Ask a question about it with a separate, deliberate second Enter press from IDLE.)
 
 Usage:
     python tests/sketch_client.py
@@ -109,6 +114,10 @@ class SketchClient:
         self.state = "IDLE"
         self.recording = False
         self.waiting_for_reply = False
+        self.is_reminder = False  # true only while waiting_for_reply is for a server-pushed
+                                   # reminder (see recv_loop()'s "reply" handling) - a tap during
+                                   # one of those should just dismiss it, not also start recording
+                                   # like a normal barge-in does
         self.ignore_incoming_audio = False
         self.music_playing = False
         self.music_kind = None  # "radio" | "song"
@@ -149,6 +158,7 @@ class SketchClient:
         has no LLM round-trip to absorb the setup delay."""
         self.state = "PROCESSING"
         self.waiting_for_reply = True
+        self.is_reminder = False
         self.player_q, self.player_thread = self._start_player()
         await self.ws.send(json.dumps({"type": "greet"}))
 
@@ -159,12 +169,21 @@ class SketchClient:
             self.start_recording()
             return
         if self.waiting_for_reply:
-            print("[touch] barge-in - stopping playback to record")
+            was_reminder = self.is_reminder
+            print("[touch] dismissing reminder" if was_reminder else
+                  "[touch] barge-in - stopping playback to record")
             self.ignore_incoming_audio = True
             self.waiting_for_reply = False
+            self.is_reminder = False
             self.stop_player()
             await self.ws.send(json.dumps({"type": "interrupt"}))
-            self.start_recording()
+            if was_reminder:
+                # Unlike a normal barge-in, don't also start recording - dismissing a reminder is
+                # just "stop"; asking a question afterward is a separate, deliberate second tap.
+                self.state = "IDLE"
+                print("Press Enter to ask something.\n")
+            else:
+                self.start_recording()
             return
         if self.recording:
             self.recording = False
@@ -218,6 +237,7 @@ class SketchClient:
         self._drain_mic_queue()
 
         self.waiting_for_reply = True
+        self.is_reminder = False
         self.player_q, self.player_thread = self._start_player()
 
     # ---- TTS reply playback ------------------------------------------------------------------
@@ -386,11 +406,19 @@ class SketchClient:
             elif t == "reply":
                 print(f"  ARIA : {data['text']}")
                 if self.state == "IDLE":
-                    # Server-initiated push (task-due reminder) - no tap preceded this, so no
-                    # player has been started yet; mirror send_greet()/send_audio()'s setup so
-                    # the audio that follows actually gets played instead of silently dropped.
+                    # Server-initiated push (task-due reminder, see services/reminders.py) - no
+                    # tap preceded this, so no player has been started yet; mirror
+                    # send_greet()/send_audio()'s setup so the audio that follows actually gets
+                    # played instead of silently dropped. If untouched, the backend repeats this
+                    # same push every REPEAT_GAP_SECONDS until Enter is pressed (routed through
+                    # the existing barge-in path below, same as interrupting a normal reply) - by
+                    # the time the next repeat's "reply" arrives, this one has normally already
+                    # finished and returned to IDLE via on_playback_complete(), so it re-arms the
+                    # same way each time.
+                    print("  (tap/Enter to dismiss - it'll keep repeating otherwise)")
                     self.state = "PROCESSING"
                     self.waiting_for_reply = True
+                    self.is_reminder = True
                     self.player_q, self.player_thread = self._start_player()
             elif t == "radio":
                 self.start_radio(data.get("url", ""), data.get("name", ""))

@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
+from starlette.websockets import WebSocketState
 
 from services import stt, llm, tts, yt_song
 from services.request_timer import new_timer, get_timer
@@ -23,22 +24,51 @@ class _ActiveConnection:
     """The single currently-connected /ws/voice client (ESP32 or tests/sketch_client.py) - tracked
     at module scope so services/reminders.py can push a spoken reminder without the device having
     asked for one. `turn_task` mirrors whatever the connection's own run loop has in flight, so
-    speak_unprompted() below can tell whether it's actually safe to send right now."""
+    speak_unprompted() below can tell whether it's actually safe to send right now. `interactions`
+    counts genuine user-initiated activity ("interrupt" / a real "end" / "greet") - see
+    interaction_count() below for why a repeating reminder needs this in addition to watching for
+    its own push getting cancelled."""
 
     def __init__(self, websocket: WebSocket, config: dict):
         self.websocket = websocket
         self.config = config
         self.turn_task: asyncio.Task | None = None
+        self.interactions = 0
 
 
 _active: _ActiveConnection | None = None
 
 
-async def speak_unprompted(text: str) -> bool:
+def interaction_count() -> int:
+    """Snapshot of the active connection's interaction counter, or -1 if nothing's connected.
+
+    services/reminders.py's repeat loop uses this as a backstop alongside speak_unprompted()'s
+    "acknowledged" outcome: that outcome only fires if the tap happens to land *while a push is
+    actively in flight*, so cancel_turn_task() has something to cancel. A tap landing in the pause
+    between repeats hits an idle connection - cancel_turn_task() finds nothing to do, so nothing
+    would otherwise tell the caller the user actually responded, and it would just repeat again on
+    schedule. Comparing this counter before/after (see reminders.py) catches that case too, since
+    it changes on any genuine user-initiated message, not just ones that collide with a push.
+    """
+    return _active.interactions if _active is not None else -1
+
+
+async def speak_unprompted(text: str) -> str:
     """Speaks `text` over the current /ws/voice connection, but only if one is connected and idle
     (no turn already in flight) - used by services/reminders.py to announce due tasks without ever
-    interrupting an active conversation. Returns whether it was actually delivered; the caller
-    should just retry on its next poll if not.
+    interrupting an active conversation.
+
+    Returns one of:
+      "delivered"    - played all the way through with nobody tapping to interrupt it. The caller
+                        should say it again (services/reminders.py loops on this) - a reminder that
+                        played out untouched hasn't been acknowledged.
+      "acknowledged" - the user tapped mid-playback, which starts a new recording and (once that
+                        recording finishes and sends "end") makes the WS receive loop's
+                        cancel_turn_task() cancel this push - the same path a real barge-in takes.
+                        The caller should stop repeating and mark the reminder as delivered.
+      "declined"     - not connected, already busy with something else, or the connection dropped
+                        out from under us mid-push - not an acknowledgment, just try again on the
+                        caller's next normal poll rather than looping tightly.
 
     Reuses the same {"type": "reply"} + streamed audio + {"type": "audio_end"} shape a normal turn
     ends with (no preceding "transcript", same as the no-STT greet flow) - the ESP32 firmware arms
@@ -50,7 +80,7 @@ async def speak_unprompted(text: str) -> bool:
     """
     conn = _active
     if conn is None or (conn.turn_task is not None and not conn.turn_task.done()):
-        return False
+        return "declined"
 
     async def _push():
         await conn.websocket.send_json({"type": "reply", "text": text})
@@ -62,20 +92,25 @@ async def speak_unprompted(text: str) -> bool:
     conn.turn_task = task
     try:
         await task
-        return True
+        return "delivered"
     except asyncio.CancelledError:
-        # Distinguish "the WS receive loop's cancel_turn_task() cancelled *this push*" (e.g. the
-        # user tapped to interrupt) - not delivered, but the caller (services/reminders.py's poll
-        # loop) must keep running - from "our own caller/task was cancelled" (e.g. reminders.stop()
-        # during shutdown), which does need to propagate. Task.cancelling() (3.11+) tells them apart;
-        # it's 0 here unless something cancelled the task that's *running this coroutine*, not the
-        # inner push task itself.
+        # Distinguish "the WS receive loop's cancel_turn_task() cancelled *this push*" from "our
+        # own caller/task was cancelled" (e.g. reminders.stop() during shutdown), which does need
+        # to propagate. Task.cancelling() (3.11+) tells them apart; it's 0 here unless something
+        # cancelled the task that's *running this coroutine*, not the inner push task itself.
         if asyncio.current_task().cancelling():
             raise
-        return False
+        # cancel_turn_task() runs for two different reasons: a real barge-in tap (connection still
+        # very much alive) - the acknowledgment we're looking for - or as part of the WS handler's
+        # own shutdown cleanup on disconnect (connection already gone). client_state flips to
+        # DISCONNECTED the moment the receive loop sees the disconnect message, before cleanup
+        # even starts, so it reliably tells the two apart.
+        if conn.websocket.client_state == WebSocketState.CONNECTED:
+            return "acknowledged"
+        return "declined"
     except Exception as e:
         logger.error(f"[ws/voice] reminder push failed: {e}", exc_info=True)
-        return False
+        return "declined"
 
 
 @router.post("/voice/chat")
@@ -266,6 +301,7 @@ async def voice_ws(websocket: WebSocket):
                     config.update({k: v for k, v in msg.items() if k in ("system_prompt", "voice", "thread_id")})
 
                 elif mtype == "interrupt":
+                    conn.interactions += 1
                     was_running = conn.turn_task is not None and not conn.turn_task.done()
                     await cancel_turn_task()
                     audio_buffer.clear()
@@ -283,12 +319,14 @@ async def voice_ws(websocket: WebSocket):
                         await websocket.send_json({"type": "error", "detail": "No audio received"})
                         continue
 
+                    conn.interactions += 1
                     await cancel_turn_task()  # defensive: shouldn't normally still be running here
                     audio_bytes = bytes(audio_buffer)
                     audio_buffer.clear()
                     conn.turn_task = asyncio.create_task(run_turn(audio_bytes, dict(config)))
 
                 elif mtype == "greet":
+                    conn.interactions += 1
                     await cancel_turn_task()  # defensive, mirrors the "end" branch
                     conn.turn_task = asyncio.create_task(run_greeting_turn(dict(config)))
 

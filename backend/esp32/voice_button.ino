@@ -107,6 +107,9 @@ size_t   recBytes  = 0;
 int  g_volumePercent = 150;   // TTS playback volume: 0=mute, 100=unity gain, up to 150=boosted (may clip)
 bool wsConnected     = false;
 bool waitingForReply = false;
+bool g_replyIsReminder = false;  // true only for a server-pushed reminder (see the "reply" handler
+                                  // below) - a tap during one of those should just dismiss it, not
+                                  // also fall through to start recording like a normal barge-in
 bool g_greetedThisBoot = false;  // RAM-only: gates the startup greeting to once per power-on,
                                   // but still re-fires it after a real reboot (unlike NVS, this
                                   // naturally survives WiFi-drop WS reconnects since setup() never
@@ -809,6 +812,7 @@ void sendAudioToBackend() {
   }
   webSocket.sendTXT("{\"type\":\"end\"}");
   waitingForReply = true;
+  g_replyIsReminder = false;
   audioEndReceived = false;
   speakingShown = false;
   ttsPrebufferPrimed = false;
@@ -936,6 +940,7 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
       if (!g_greetedThisBoot && !musicPlaying) {
         g_greetedThisBoot = true;
         waitingForReply = true;
+        g_replyIsReminder = false;
         audioEndReceived = false;
         speakingShown = false;
         ttsPrebufferPrimed = false;
@@ -994,6 +999,7 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
           // if a song happens to be playing, that TTS gets silently dropped (see drainTtsRing()'s
           // ring-buffer backpressure) rather than colliding with it - the backend retries later.
           waitingForReply = true;
+          g_replyIsReminder = true;
           audioEndReceived = false;
           speakingShown = false;
           ttsPrebufferPrimed = false;
@@ -2311,20 +2317,35 @@ void loop() {
   }
 
   if (waitingForReply) {
-    // A touch here means "interrupt and ask again" - stop whatever's playing/pending and
-    // fall straight into a fresh listen below, using the same touch-to-talk gesture as idle.
+    // A touch here means either "interrupt and ask again" (normal reply) - stop whatever's
+    // playing/pending and fall straight into a fresh listen below, using the same touch-to-talk
+    // gesture as idle - or, for a reminder, just "stop, and only that" (see g_replyIsReminder's
+    // comment up top): asking a question afterward is left to a deliberate second tap, not
+    // bundled into this one the way a normal barge-in bundles stop+listen.
     if (!tapped) {
       return;   // drainTtsRing() above already paces this loop at ~21ms/iteration via its I2S write
     }
-    Serial.println("[touch] barge-in - stopping playback to listen again");
+    bool wasReminder = g_replyIsReminder;
+    Serial.println(wasReminder ? "[touch] dismissing reminder"
+                                : "[touch] barge-in - stopping playback to listen again");
     ttsHead = ttsTail = ttsFill = 0;
     ignoreIncomingAudio = true;   // discard the interrupted turn's remaining bytes (see flag comment above)
     waitingForReply = false;
+    g_replyIsReminder = false;
     audioEndReceived = false;
     speakingShown = false;
     ttsPrebufferPrimed = false;
     fadeInSamplesRemaining = 0;
     pendingSpeakingDisplay = false;
+    if (wasReminder) {
+      // Unlike a normal barge-in, nothing else is coming after this tap to tell the backend to
+      // stop repeating the reminder (no recording, so no "end" for its defensive cancel_turn_task()
+      // to key off) - say so explicitly. services/reminders.py's repeat loop treats this exactly
+      // like any other tap-driven interrupt.
+      webSocket.sendTXT("{\"type\":\"interrupt\"}");
+      updateDisplay(STATE_IDLE);
+      return;   // dismiss only - don't also fall through into a tap-triggered recording
+    }
   }
 
   if (musicPlaying) {

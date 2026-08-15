@@ -15,7 +15,14 @@ import dateparser
 from langchain_core.tools import tool
 
 _IST = ZoneInfo("Asia/Kolkata")
-_TIME_HINT = re.compile(r"\d{1,2}(:\d{2})?\s*(am|pm)|:\d{2}|\bnoon\b|\bmidnight\b|\bo'?clock\b", re.I)
+_TIME_HINT = re.compile(
+    r"\d{1,2}(:\d{2})?\s*(am|pm)"                       # 3pm, 3:30 PM
+    r"|:\d{2}"                                           # 17:30
+    r"|\bnoon\b|\bmidnight\b|\bo'?clock\b"               # noon / midnight / 5 o'clock
+    r"|\bin\s+(a|an|\d+)\s*(hour|hr|minute|min)s?\b"     # in 2 hours, in an hour, in 30 minutes/mins
+    r"|\b(hour|hr|minute|min)s?\s+from\s+now\b",         # an hour from now, 30 minutes from now
+    re.I,
+)
 
 
 def _parse_due(value: str) -> str:
@@ -36,6 +43,10 @@ def _parse_due(value: str) -> str:
     if dt is None:
         return value  # unparseable — store as-is
     dt = dt.astimezone(_IST)
+    # Can't tell date-only from time-specific by inspecting dt itself - dateparser fills in the
+    # *current* time-of-day (not midnight) when the input has no time component of its own, so a
+    # date-only "tomorrow" and a time-specific "tomorrow at 3pm" are otherwise indistinguishable
+    # from the parsed result alone. _TIME_HINT matching the original text is the only signal.
     if _TIME_HINT.search(value):
         return dt.strftime("%Y-%m-%d %H:%M")
     return dt.strftime("%Y-%m-%d")
